@@ -117,8 +117,14 @@ class TradeStore:
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._db = await aiosqlite.connect(self.db_path)
         self._db.row_factory = aiosqlite.Row
-        await self._db.execute("PRAGMA journal_mode=WAL;")
-        await self._db.execute("PRAGMA synchronous=NORMAL;")
+        # WAL gives concurrent dashboard reads, but some filesystems (network
+        # shares, certain mounts) reject the shared-memory file WAL needs. Fall
+        # back to the default rollback journal there instead of failing hard.
+        try:
+            await self._db.execute("PRAGMA journal_mode=WAL;")
+            await self._db.execute("PRAGMA synchronous=NORMAL;")
+        except Exception:
+            logger.warning("WAL journal unavailable; using default journal mode.")
         await self._db.executescript(_SCHEMA)
         await self._db.commit()
         logger.info("TradeStore connected at %s", self.db_path)

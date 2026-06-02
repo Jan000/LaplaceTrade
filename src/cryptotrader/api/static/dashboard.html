@@ -157,8 +157,20 @@
 
     $("start").onclick = async () => {
       setRunning(true);
-      await fetch("/api/start", { method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ mode: $("mode").value }) });
+      try {
+        const r = await fetch("/api/start", { method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ mode: $("mode").value }) });
+        if (!r.ok) {
+          const body = await r.json().catch(() => ({}));
+          $("mode-label").textContent = "error: " + (body.error || r.statusText);
+          $("status-dot").className = "dot error";
+          setRunning(false);
+        }
+      } catch (e) {
+        $("mode-label").textContent = "error: cannot reach server";
+        $("status-dot").className = "dot error";
+        setRunning(false);
+      }
     };
     $("stop").onclick = async () => {
       await fetch("/api/stop", { method: "POST" }); setRunning(false);

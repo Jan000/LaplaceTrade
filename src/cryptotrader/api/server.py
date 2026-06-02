@@ -66,7 +66,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.post("/api/start")
     async def start(req: StartRequest) -> JSONResponse:
-        await controller.start(mode=req.mode, real_orders=req.real_orders)
+        try:
+            await controller.start(mode=req.mode, real_orders=req.real_orders)
+        except Exception as exc:  # surface the reason to the UI, don't 500 silently
+            controller.state.status = "error"
+            logger.exception("Failed to start engine")
+            return JSONResponse(
+                {"status": "error", "error": str(exc)}, status_code=400
+            )
         return JSONResponse({"status": "running", "mode": req.mode})
 
     @app.post("/api/stop")

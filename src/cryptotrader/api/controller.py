@@ -86,7 +86,21 @@ class EngineController:
                 execution = PaperExecutionHandler(self.settings.execution)
                 self.settings.mode = RunMode.BACKTEST
 
-            self._store = await TradeStore(self.settings.persistence.db_path).connect()
+            # Persistence is best-effort: if the DB can't be opened (e.g. a
+            # read-only or network filesystem that rejects SQLite WAL), the
+            # engine still runs and the dashboard still works — we simply don't
+            # log to disk. This keeps "press Start" from ever silently failing.
+            self._store = None
+            try:
+                self._store = await TradeStore(
+                    self.settings.persistence.db_path
+                ).connect()
+            except Exception:
+                logger.exception(
+                    "TradeStore unavailable (%s); running without persistence.",
+                    self.settings.persistence.db_path,
+                )
+
             self.state = EngineState(symbol=self.settings.exchange.symbol)
             self.state.mode = mode
             self._engine = LiveTradingEngine(
