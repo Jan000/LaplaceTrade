@@ -1,0 +1,43 @@
+# pyproject.toml
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cryptotrader"
+version = "0.1.0"
+description = "AI-driven high-frequency intraday crypto trading bot (MVP)"
+requires-python = ">=3.11"
+dependencies = [
+    "numpy>=1.26",
+    "pandas>=2.1",
+    "ccxt>=4.2",
+    "lightgbm>=4.3",
+    "scikit-learn>=1.4",
+    "pydantic>=2.6",
+    "pydantic-settings>=2.2",
+    "PyYAML>=6.0",
+    "fastapi>=0.110",
+    "uvicorn[standard]>=0.29",
+    "aiosqlite>=0.20",
+]
+
+[project.optional-dependencies]
+dashboard = ["streamlit>=1.33", "plotly>=5.20"]
+dev = ["pytest>=8.1", "pytest-asyncio>=0.23", "ruff>=0.3", "mypy>=1.9"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+ignore_missing_imports = true

@@ -1,0 +1,41 @@
+# config/config.yaml
+# Central runtime configuration. Loaded by cryptotrader.config.Settings.
+# Secrets (API keys) should come from environment variables, NOT this file.
+
+mode: backtest            # backtest | live
+
+exchange:
+  id: binance             # any ccxt-supported id (binance, bybit, ...)
+  symbol: BTC/USDT
+  timeframe: 1m
+  # api_key / api_secret are read from env: CT_EXCHANGE__API_KEY, CT_EXCHANGE__API_SECRET
+
+data:
+  history_days: 30        # how much 1m history to pull for backtests
+  cache_dir: .cache/ohlcv
+
+features:
+  atr_period: 14
+  vwap_window: 60         # rolling intraday VWAP window in minutes
+  momentum_windows: [3, 5, 15]
+  volume_spike_window: 30
+  zscore_window: 60
+
+risk:
+  account_equity: 10000.0
+  risk_per_trade: 0.005   # 0.5 % of equity risked per trade
+  atr_stop_mult: 2.0      # hard stop = entry -/+ atr_stop_mult * ATR
+  atr_trail_mult: 1.5     # trailing take-profit distance in ATR units
+  max_open_positions: 1
+
+execution:
+  taker_fee: 0.0004       # 4 bps (Binance taker)
+  slippage_bps: 1.0       # assumed slippage in basis points per fill
+
+strategy:
+  long_threshold: 0.58    # model proba above which we go long
+  short_threshold: 0.58   # model proba above which we go short
+  allow_short: true
+
+persistence:
+  db_path: data/cryptotrader.sqlite
