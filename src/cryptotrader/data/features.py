@@ -115,6 +115,10 @@ class MicrostructureFeatureEngine(FeatureCalculator):
         # Recursive features (Wilder ATR/RSI) depend on full history; a generous
         # buffer makes the live EWM converge to the batch value (decays ~e^-k).
         self._buffer: deque[Bar] = deque(maxlen=max(self._warmup * 5, 600))
+        # Cache of the most recent incremental feature row (live mode), so callers
+        # (e.g. the live engine) can read derived values like ATR without paying
+        # for a second full transform over the buffer.
+        self._last_features: pd.Series | None = None
 
     # ------------------------------------------------------------------ #
     # Public API
@@ -122,6 +126,11 @@ class MicrostructureFeatureEngine(FeatureCalculator):
     @property
     def feature_names(self) -> list[str]:
         return list(self._names)
+
+    @property
+    def last_features(self) -> pd.Series | None:
+        """Most recent feature row produced by :meth:`update` (or ``None``)."""
+        return self._last_features
 
     @property
     def warmup(self) -> int:
@@ -215,6 +224,7 @@ class MicrostructureFeatureEngine(FeatureCalculator):
             index=pd.DatetimeIndex([b.timestamp for b in self._buffer]),
         )
         row = self.transform(df).iloc[-1]
+        self._last_features = row
         return row if not row.isna().any() else None
 
     def reset(self) -> None:

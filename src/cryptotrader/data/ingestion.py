@@ -1,12 +1,14 @@
 # src/cryptotrader/data/ingestion.py
 """Asynchronous market-data ingestion.
 
-This module provides three things:
+This module provides four things:
 
 * :class:`MarketDataFeed`  — a thin async wrapper around ccxt that pulls paginated
   historical OHLCV (with on-disk caching) and streams live candles.
 * :class:`HistoricalDataHandler` — replays a cached DataFrame as ordered
   :class:`MarketEvent` objects for the backtester.
+* :class:`ReplayDataHandler` — like the historical handler but paced with a small
+  real delay, so the dashboard's simulation mode animates like a live feed.
 * :class:`LiveDataHandler` — bridges the live websocket stream into the same
   :class:`MarketEvent` interface, so the rest of the system is mode-agnostic.
 
@@ -25,7 +27,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import AsyncIterator
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pandas as pd
@@ -36,10 +38,8 @@ from cryptotrader.core.types import Bar
 
 logger = logging.getLogger(__name__)
 
-# Canonical column order for every OHLCV DataFrame in the system.
 OHLCV_COLUMNS = ["open", "high", "low", "close", "volume"]
 
-# Map common ccxt timeframes to their millisecond duration for pagination.
 _TIMEFRAME_MS = {
     "1m": 60_000,
     "3m": 180_000,
@@ -50,21 +50,7 @@ _TIMEFRAME_MS = {
 
 
 class MarketDataFeed:
-    """Async ccxt data source for one symbol/timeframe on one exchange.
-
-    Parameters
-    ----------
-    exchange_id:
-        Any ccxt exchange id (``"binance"``, ``"bybit"``, ...).
-    symbol:
-        Unified ccxt symbol, e.g. ``"BTC/USDT"``.
-    timeframe:
-        Candle timeframe, e.g. ``"1m"``.
-    cache_dir:
-        Directory for parquet OHLCV caches. ``None`` disables caching.
-    api_key, api_secret:
-        Optional credentials; only required for live private endpoints.
-    """
+    """Async ccxt data source for one symbol/timeframe on one exchange."""
 
     def __init__(
         self,
@@ -82,17 +68,14 @@ class MarketDataFeed:
         self._api_key = api_key
         self._api_secret = api_secret
         self._tf_ms = _TIMEFRAME_MS.get(timeframe, 60_000)
-        self._client: object | None = None  # lazily created ccxt client
+        self._client: object | None = None
 
-    # ------------------------------------------------------------------ #
-    # Client lifecycle
-    # ------------------------------------------------------------------ #
     def _make_client(self, pro: bool = False):
         """Instantiate a ccxt (or ccxt.pro) async client lazily."""
         module_name = "ccxt.pro" if pro else "ccxt.async_support"
         try:
             module = __import__(module_name, fromlist=["dummy"])
-        except ImportError as exc:  # pragma: no cover - depends on optional dep
+        except ImportError as exc:  # pragma: no cover
             raise RuntimeError(
                 f"{module_name} is required for live/network data ingestion."
             ) from exc
@@ -111,9 +94,6 @@ class MarketDataFeed:
             await self._client.close()  # type: ignore[func-returns-value]
             self._client = None
 
-    # ------------------------------------------------------------------ #
-    # Historical data
-    # ------------------------------------------------------------------ #
     def _cache_path(self, start: datetime, end: datetime) -> Path | None:
         if self.cache_dir is None:
             return None
@@ -130,11 +110,7 @@ class MarketDataFeed:
         end: datetime | None = None,
         use_cache: bool = True,
     ) -> pd.DataFrame:
-        """Fetch paginated OHLCV in ``[start, end]`` as a UTC-indexed DataFrame.
-
-        Returns a DataFrame indexed by candle close time with columns
-        :data:`OHLCV_COLUMNS`. Results are cached to parquet keyed by the range.
-        """
+        """Fetch paginated OHLCV in [start, end] as a UTC-indexed DataFrame."""
         end = end or datetime.now(tz=timezone.utc)
         cache_path = self._cache_path(start, end)
         if use_cache and cache_path is not None and cache_path.exists():
@@ -145,7 +121,7 @@ class MarketDataFeed:
         since = int(start.timestamp() * 1000)
         end_ms = int(end.timestamp() * 1000)
         rows: list[list[float]] = []
-        limit = 1000  # exchange max page size
+        limit = 1000
 
         while since < end_ms:
             batch = await self._client.fetch_ohlcv(  # type: ignore[attr-defined]
@@ -155,7 +131,6 @@ class MarketDataFeed:
                 break
             rows.extend(batch)
             since = batch[-1][0] + self._tf_ms
-            # Respect rate limits; ccxt also throttles internally.
             await asyncio.sleep(getattr(self._client, "rateLimit", 200) / 1000.0)
             if len(batch) < limit:
                 break
@@ -179,16 +154,8 @@ class MarketDataFeed:
         df = df[~df.index.duplicated(keep="last")]
         return df.astype(float)
 
-    # ------------------------------------------------------------------ #
-    # Live data
-    # ------------------------------------------------------------------ #
     async def stream_live(self, poll_interval: float = 1.0) -> AsyncIterator[Bar]:
-        """Yield each newly *closed* candle as a :class:`Bar`.
-
-        Prefers ``ccxt.pro``'s websocket ``watch_ohlcv``; if unavailable, falls
-        back to REST polling. Only candles strictly older than the most recent
-        (still-forming) one are emitted, so no partial bar ever leaks downstream.
-        """
+        """Yield each newly closed candle as a :class:`Bar`."""
         try:
             client = self._make_client(pro=True)
             self._client = client
@@ -203,7 +170,6 @@ class MarketDataFeed:
         last_ts: int | None = None
         while True:
             ohlcv = await client.watch_ohlcv(self.symbol, self.timeframe)
-            # The final element is the still-forming candle -> emit the prior one.
             for row in ohlcv[:-1]:
                 if last_ts is None or row[0] > last_ts:
                     last_ts = row[0]
@@ -217,7 +183,7 @@ class MarketDataFeed:
                 self.symbol, timeframe=self.timeframe, limit=2
             )
             if len(batch) >= 2:
-                closed = batch[-2]  # last fully closed candle
+                closed = batch[-2]
                 if last_ts is None or closed[0] > last_ts:
                     last_ts = closed[0]
                     yield Bar.from_ccxt(closed)
@@ -252,6 +218,29 @@ class HistoricalDataHandler(DataHandler):
             yield MarketEvent(bar)
 
 
+class ReplayDataHandler(DataHandler):
+    """Replays cached OHLCV at an accelerated, wall-clock-paced cadence.
+
+    Used by the dashboard's simulation mode: it emits bars with a small real
+    delay so the UI animates like a live feed, without any network/keys. The
+    engine logic is identical to live trading — only the clock is fake.
+    """
+
+    def __init__(self, ohlcv: pd.DataFrame, delay: float = 0.02) -> None:
+        self._inner = HistoricalDataHandler(ohlcv)
+        self._delay = delay
+
+    @property
+    def bars(self) -> list[Bar]:
+        return self._inner.bars
+
+    async def stream(self) -> AsyncIterator[MarketEvent]:
+        for bar in self._inner.bars:
+            yield MarketEvent(bar)
+            if self._delay > 0:
+                await asyncio.sleep(self._delay)
+
+
 class LiveDataHandler(DataHandler):
     """Adapts a :class:`MarketDataFeed` live stream to the event interface."""
 
@@ -270,19 +259,13 @@ def make_synthetic_ohlcv(
     seed: int = 7,
     start_price: float = 30_000.0,
 ) -> pd.DataFrame:
-    """Generate a realistic-ish synthetic 1m OHLCV frame for tests/demos.
-
-    Uses a GBM-like random walk with volatility clustering and volume that
-    correlates with absolute returns — enough structure to exercise the feature
-    engine and backtester without any network access.
-    """
+    """Generate a realistic-ish synthetic 1m OHLCV frame for tests/demos."""
     import numpy as np
 
     rng = np.random.default_rng(seed)
     start = start or datetime(2024, 1, 1, tzinfo=timezone.utc)
     index = pd.date_range(start=start, periods=n, freq="1min", tz="UTC")
 
-    # Volatility clustering via a simple AR(1) on log-variance.
     vol = np.empty(n)
     vol[0] = 0.0006
     for i in range(1, n):
