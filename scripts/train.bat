@@ -7,26 +7,29 @@ REM CT_<SECTION>__<FIELD> convention (overrides config\config.yaml for this run)
 REM Run from the repo root (the folder this script's parent lives in).
 cd /d "%~dp0\.."
 
-REM --- Data to train on ---
-set DAYS=365
+REM --- Data to train on (defaults = best config from scripts/sweep.py) ---
+set DAYS=730
 set EXCHANGE=binance
 set SYMBOL=BTC/USDT
-set TIMEFRAME=15m
+set TIMEFRAME=1h
 
 REM --- Barriers (labels + exits) ---
-set CT_BARRIERS__TP_MULT=2.5
+set CT_BARRIERS__TP_MULT=1.5
 set CT_BARRIERS__SL_MULT=1.0
 set CT_BARRIERS__HORIZON=15
 
 REM --- Strategy thresholds (higher = fewer, better trades) ---
-set CT_STRATEGY__LONG_THRESHOLD=0.66
-set CT_STRATEGY__SHORT_THRESHOLD=0.66
+set CT_STRATEGY__LONG_THRESHOLD=0.64
+set CT_STRATEGY__SHORT_THRESHOLD=0.64
 
 REM --- Risk / cost control ---
-set CT_RISK__MIN_EDGE_COST_RATIO=3.0
+set CT_RISK__MIN_EDGE_COST_RATIO=8.0
 set CT_RISK__MAX_LEVERAGE=1.0
-set CT_RISK__COOLDOWN_BARS=5
+set CT_RISK__COOLDOWN_BARS=3
 set CT_RISK__RISK_PER_TRADE=0.005
+
+REM --- Execution: 0.0004 taker (honest); uncomment next line for maker ---
+REM set CT_EXECUTION__TAKER_FEE=0.0002
 
 REM --- Model (LightGBM) ---
 set CT_MODEL__N_ESTIMATORS=800

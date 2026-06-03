@@ -75,7 +75,8 @@ async def load_ohlcv(settings: Settings, args: argparse.Namespace) -> pd.DataFra
         api_key=settings.exchange.api_key,
         api_secret=settings.exchange.api_secret,
     )
-    start = datetime.now(tz=timezone.utc) - timedelta(days=args.days)
+    days = args.days if args.days is not None else settings.data.history_days
+    start = datetime.now(tz=timezone.utc) - timedelta(days=days)
     try:
         df = await feed.fetch_history(start)
     except Exception as exc:  # network / TLS / proxy / geo-block / bad symbol
@@ -123,7 +124,8 @@ def backtest(settings: Settings, ohlcv: pd.DataFrame, predictor) -> dict:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Train & evaluate the LightGBM model")
-    parser.add_argument("--days", type=int, default=45, help="days of history to fetch")
+    parser.add_argument("--days", type=int, default=None,
+                        help="days of history to fetch (default: config data.history_days)")
     parser.add_argument("--symbol", type=str, default=None, help="override config symbol")
     parser.add_argument(
         "--exchange", type=str, default=None,

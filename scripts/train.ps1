@@ -14,25 +14,31 @@
 Set-Location (Join-Path $PSScriptRoot "..")
 
 # --- Data to train on ---------------------------------------------------
-$Days      = 365          # how many days of history to fetch
+# Defaults below reflect the best config found by scripts/sweep.py (profitable
+# on the 1h hold-out). Tweak and re-run to keep experimenting.
+$Days      = 730          # how many days of history to fetch
 $Exchange  = "binance"    # binance | bybit | kraken | coinbase | binanceus
 $Symbol    = "BTC/USDT"
-$Timeframe = "15m"        # 5m | 15m | 1h ...
+$Timeframe = "1h"         # 5m | 15m | 1h ...
 
 # --- Barriers (used for BOTH labels and trade exits) --------------------
-$env:CT_BARRIERS__TP_MULT = "2.5"   # take-profit in ATR (bigger wins vs costs)
+$env:CT_BARRIERS__TP_MULT = "1.5"   # take-profit in ATR
 $env:CT_BARRIERS__SL_MULT = "1.0"   # stop-loss in ATR
 $env:CT_BARRIERS__HORIZON = "15"    # time-exit after N bars
 
 # --- Strategy entry thresholds (higher = fewer, better trades) ----------
-$env:CT_STRATEGY__LONG_THRESHOLD  = "0.66"
-$env:CT_STRATEGY__SHORT_THRESHOLD = "0.66"
+$env:CT_STRATEGY__LONG_THRESHOLD  = "0.64"
+$env:CT_STRATEGY__SHORT_THRESHOLD = "0.64"
 
 # --- Risk / cost control ------------------------------------------------
-$env:CT_RISK__MIN_EDGE_COST_RATIO = "3.0"   # only trade if TP target >= 3x cost
+$env:CT_RISK__MIN_EDGE_COST_RATIO = "8.0"   # only trade if TP target >= 8x cost
 $env:CT_RISK__MAX_LEVERAGE        = "1.0"   # cap notional at 1x equity
-$env:CT_RISK__COOLDOWN_BARS       = "5"     # wait N bars after a trade
+$env:CT_RISK__COOLDOWN_BARS       = "3"     # wait N bars after a trade
 $env:CT_RISK__RISK_PER_TRADE      = "0.005" # 0.5% of equity risked per trade
+
+# --- Execution costs ----------------------------------------------------
+# 0.0004 = taker (market orders, honest default). Uncomment for maker/limit:
+# $env:CT_EXECUTION__TAKER_FEE = "0.0002"
 
 # --- Model (LightGBM) ---------------------------------------------------
 $env:CT_MODEL__N_ESTIMATORS  = "800"

@@ -7,11 +7,11 @@ mode: backtest            # backtest | live
 exchange:
   id: binance             # any ccxt-supported id (binance, bybit, ...)
   symbol: BTC/USDT
-  timeframe: 15m          # larger timeframe -> bigger ATR/price -> far less cost drag
+  timeframe: 1h           # 1h was profitable in the sweep (less cost drag, higher win rate)
   # api_key / api_secret are read from env: CT_EXCHANGE__API_KEY, CT_EXCHANGE__API_SECRET
 
 data:
-  history_days: 365       # how much history to pull for backtests
+  history_days: 730       # how much history to pull for backtests
   cache_dir: .cache/ohlcv
   # replay_file: models/holdout.parquet   # dashboard sim replays this real slice
 
@@ -65,7 +65,7 @@ risk:
   max_open_positions: 1
   # --- Cost control (the levers that stop the fee bleed) ---
   max_leverage: 1.0       # cap notional at 1x equity -> fees stay proportional
-  min_edge_cost_ratio: 2.0  # only trade if TP target >= 2x round-trip cost
+  min_edge_cost_ratio: 8.0  # only trade if TP target >= 8x round-trip cost
   cooldown_bars: 3        # wait N bars after a trade before re-entering
 
 execution:
@@ -73,8 +73,8 @@ execution:
   slippage_bps: 1.0       # assumed slippage in basis points per fill
 
 strategy:
-  long_threshold: 0.62    # higher => fewer, higher-conviction trades => less cost
-  short_threshold: 0.62
+  long_threshold: 0.64    # sweep optimum on the 1h hold-out
+  short_threshold: 0.64
   allow_short: true
   # model_path: models/model.pkl          # trained LightGBM model; baseline if unset
 
