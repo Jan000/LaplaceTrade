@@ -60,12 +60,15 @@ class Portfolio:
         self,
         fill: FillEvent,
         stop_distance: float,
-        trail_distance: float,
+        tp_distance: float,
+        max_hold_bars: int = 0,
     ) -> None:
         """Open a new position from an entry fill.
 
-        Protective levels are anchored to the *actual* fill price (not the
-        signal-bar close), so slippage and next-bar gaps are reflected.
+        Protective levels (the triple barriers) are anchored to the *actual* fill
+        price (not the signal-bar close), so slippage and next-bar gaps are
+        reflected: a stop-loss at ``stop_distance``, a take-profit at
+        ``tp_distance``, and a vertical (time) barrier of ``max_hold_bars`` bars.
         """
         if self.position is not None:
             raise RuntimeError("Cannot open a position while one is already open.")
@@ -79,8 +82,9 @@ class Portfolio:
             entry_price=entry,
             entry_time=fill.timestamp,
             stop_loss=entry - direction * stop_distance,
-            take_profit=entry + direction * trail_distance,
-            trail_distance=trail_distance,
+            take_profit=entry + direction * tp_distance,
+            trail_distance=0.0,  # fixed-barrier exits; no trailing
+            max_hold_bars=max_hold_bars,
             mfe_price=entry,
             mae_price=entry,
         )

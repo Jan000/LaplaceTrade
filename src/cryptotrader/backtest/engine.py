@@ -28,7 +28,11 @@ from dataclasses import dataclass
 
 import pandas as pd
 
-from cryptotrader.backtest.metrics import PerformanceReport, compute_metrics
+from cryptotrader.backtest.metrics import (
+    PerformanceReport,
+    bars_per_year_for,
+    compute_metrics,
+)
 from cryptotrader.backtest.portfolio import Portfolio
 from cryptotrader.config import Settings
 from cryptotrader.core.events import OrderEvent
@@ -80,6 +84,9 @@ class EventDrivenBacktester:
         self._settings = settings
         self._symbol = settings.exchange.symbol
         self._portfolio = Portfolio(settings.risk.account_equity, self._symbol)
+        self._cooldown_bars = settings.risk.cooldown_bars
+        self._cooldown_remaining = 0
+        self._trades_seen = 0
 
     # ------------------------------------------------------------------ #
     # Public API
@@ -103,6 +110,7 @@ class EventDrivenBacktester:
             self._portfolio.trades,
             self._portfolio.equity_curve,
             self._portfolio.initial_equity,
+            bars_per_year=bars_per_year_for(self._settings.exchange.timeframe),
         )
         equity_df = pd.DataFrame(
             self._portfolio.equity_curve, columns=["timestamp", "equity"]
@@ -121,6 +129,9 @@ class EventDrivenBacktester:
     def _step(
         self, index: int, bar: Bar, atr_now: float, pending: OrderEvent | None
     ) -> OrderEvent | None:
+        if self._cooldown_remaining > 0:
+            self._cooldown_remaining -= 1
+
         # (a) Execute the order queued on the previous bar, at this bar's open.
         if pending is not None:
             self._execute_pending(pending, bar)
@@ -128,6 +139,11 @@ class EventDrivenBacktester:
         # (b) Manage an open position against this bar's range.
         if self._portfolio.has_position:
             self._manage_position(bar)
+
+        # A trade just closed this bar -> start the cooldown before re-entry.
+        if len(self._portfolio.trades) > self._trades_seen:
+            self._trades_seen = len(self._portfolio.trades)
+            self._cooldown_remaining = self._cooldown_bars
 
         # (c) Mark-to-market on the close.
         self._portfolio.mark(bar.timestamp, bar.close)
@@ -142,36 +158,50 @@ class EventDrivenBacktester:
             if self._portfolio.has_position:
                 self._portfolio.close_position(fill, exit_reason="signal")
         else:
-            self._portfolio.open_position(fill, order.stop_distance, order.trail_distance)
+            self._portfolio.open_position(
+                fill, order.stop_distance, order.tp_distance, order.max_hold_bars
+            )
+
+    def _exit_at(self, bar: Bar, pos, price: float, reason: str) -> None:
+        """Submit and book an exit fill at ``price`` for the open position."""
+        exit_order = OrderEvent(
+            symbol=self._symbol,
+            timestamp=bar.timestamp,
+            side=_opposite(pos.side),
+            quantity=pos.quantity,
+            order_type=OrderType.MARKET,
+            is_exit=True,
+        )
+        fill = self._exec.execute(exit_order, bar, fill_price=price)
+        self._portfolio.close_position(fill, exit_reason=reason)
 
     def _manage_position(self, bar: Bar) -> None:
-        """Apply stop / trailing-stop logic, then update the favourable excursion.
+        """Apply the triple barriers (stop-loss, take-profit, time) to this bar.
 
-        The stop level is evaluated *before* this bar's extremes are folded into
-        the MFE, so a single bar cannot both ratchet the trail and escape it.
+        The stop is checked before the take-profit so that a bar straddling both
+        is resolved conservatively (assume the adverse level filled first). The
+        favourable excursion is only extended when no barrier triggers.
         """
         pos = self._portfolio.position
         assert pos is not None
-        stop = self._portfolio.trailing_stop()
+        pos.bars_held += 1
+        long = pos.side is Side.LONG
 
-        hit = (pos.side is Side.LONG and bar.low <= stop) or (
-            pos.side is Side.SHORT and bar.high >= stop
-        )
-        if hit:
-            reason = "trailing_stop" if stop != pos.stop_loss else "stop_loss"
-            exit_order = OrderEvent(
-                symbol=self._symbol,
-                timestamp=bar.timestamp,
-                side=_opposite(pos.side),
-                quantity=pos.quantity,
-                order_type=OrderType.MARKET,
-                is_exit=True,
-            )
-            fill = self._exec.execute(exit_order, bar, fill_price=stop)
-            self._portfolio.close_position(fill, exit_reason=reason)
+        stop_hit = (long and bar.low <= pos.stop_loss) or (not long and bar.high >= pos.stop_loss)
+        if stop_hit:
+            self._exit_at(bar, pos, pos.stop_loss, "stop_loss")
             return
 
-        # Not stopped: extend the excursion for use on subsequent bars.
+        tp_hit = (long and bar.high >= pos.take_profit) or (not long and bar.low <= pos.take_profit)
+        if tp_hit:
+            self._exit_at(bar, pos, pos.take_profit, "take_profit")
+            return
+
+        if pos.max_hold_bars and pos.bars_held >= pos.max_hold_bars:
+            self._exit_at(bar, pos, bar.close, "time_exit")
+            return
+
+        # No barrier hit: extend the excursion for use on subsequent bars.
         self._portfolio.update_excursion(bar.high, bar.low)
 
     def _generate_order(self, bar: Bar, atr_now: float) -> OrderEvent | None:
@@ -196,7 +226,9 @@ class EventDrivenBacktester:
                 )
             return None  # same direction -> hold
 
-        # Flat: size a fresh entry.
+        # Flat: respect the post-trade cooldown, then size a fresh entry.
+        if self._cooldown_remaining > 0:
+            return None
         equity = self._portfolio.equity(bar.close)
         return self._risk.size_order(
             signal, bar, atr_now, equity, has_open_position=False

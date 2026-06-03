@@ -34,14 +34,7 @@ from cryptotrader.strategy.ml_strategy import MLStrategy  # noqa: E402
 
 
 def build_feature_engine(settings: Settings) -> MicrostructureFeatureEngine:
-    fc = settings.features
-    return MicrostructureFeatureEngine(
-        atr_period=fc.atr_period,
-        vwap_window=fc.vwap_window,
-        momentum_windows=fc.momentum_windows,
-        volume_spike_window=fc.volume_spike_window,
-        zscore_window=fc.zscore_window,
-    )
+    return MicrostructureFeatureEngine(**settings.features.model_dump())
 
 
 def main() -> None:
@@ -59,14 +52,17 @@ def main() -> None:
 
     if args.lgbm:
         features = feature_engine.transform(ohlcv)
-        labels = make_triple_barrier_labels(ohlcv, features["atr"], horizon=15)
-        predictor: object = LightGBMPredictor()
-        predictor.train(features, labels)  # type: ignore[attr-defined]
+        labels = make_triple_barrier_labels(
+            ohlcv, features["atr"], horizon=settings.barriers.horizon,
+            tp_mult=settings.barriers.tp_mult, sl_mult=settings.barriers.sl_mult,
+        )
+        predictor: object = LightGBMPredictor(settings.model.to_lgbm_params())
+        predictor.train(features, labels, eval_fraction=settings.model.eval_fraction)  # type: ignore[attr-defined]
     else:
         predictor = MomentumBaselinePredictor()
 
     strategy = MLStrategy(predictor, settings.strategy, settings.exchange.symbol)
-    risk = ATRRiskManager(settings.risk)
+    risk = ATRRiskManager(settings.risk, settings.barriers, settings.execution)
     execution = SimulatedExecutionHandler(settings.execution)
 
     backtester = EventDrivenBacktester(

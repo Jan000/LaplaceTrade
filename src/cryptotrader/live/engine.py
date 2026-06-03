@@ -80,6 +80,9 @@ class LiveTradingEngine:
         self._portfolio = Portfolio(settings.risk.account_equity, self._symbol)
         self._latest_atr: float = 0.0
         self._stop = False
+        self._cooldown_bars = settings.risk.cooldown_bars
+        self._cooldown_remaining = 0
+        self._trades_seen = 0
 
     # ------------------------------------------------------------------ #
     # Public API
@@ -127,9 +130,17 @@ class LiveTradingEngine:
     async def _on_bar(self, event: MarketEvent) -> None:
         bar = event.bar
 
+        if self._cooldown_remaining > 0:
+            self._cooldown_remaining -= 1
+
         # (1) Manage an open position against this bar's range.
         if self._portfolio.has_position:
             await self._manage_position(bar)
+
+        # A trade just closed -> start the post-trade cooldown before re-entry.
+        if len(self._portfolio.trades) > self._trades_seen:
+            self._trades_seen = len(self._portfolio.trades)
+            self._cooldown_remaining = self._cooldown_bars
 
         # (2) Strategy signal (incremental feature update happens inside).
         signal = self._strategy.on_market(event)
@@ -137,9 +148,9 @@ class LiveTradingEngine:
 
         # (3) Act on the signal.
         if signal is not None and signal.side is not Side.FLAT:
-            if not self._portfolio.has_position:
+            if not self._portfolio.has_position and self._cooldown_remaining == 0:
                 await self._try_enter(signal, bar)
-            elif signal.side is not self._portfolio.position_side:
+            elif self._portfolio.has_position and signal.side is not self._portfolio.position_side:
                 await self._exit(bar, reason="signal", fill_price=bar.close)
 
         # (4) Mark, persist, broadcast.
@@ -147,17 +158,27 @@ class LiveTradingEngine:
         await self._sync_state(bar)
 
     async def _manage_position(self, bar: Bar) -> None:
+        """Apply the triple barriers (stop-loss, take-profit, time) to this bar."""
         pos = self._portfolio.position
         assert pos is not None
-        stop = self._portfolio.trailing_stop()
-        hit = (pos.side is Side.LONG and bar.low <= stop) or (
-            pos.side is Side.SHORT and bar.high >= stop
-        )
-        if hit:
-            reason = "trailing_stop" if stop != pos.stop_loss else "stop_loss"
-            await self._exit(bar, reason=reason, fill_price=stop)
-        else:
-            self._portfolio.update_excursion(bar.high, bar.low)
+        pos.bars_held += 1
+        long = pos.side is Side.LONG
+
+        stop_hit = (long and bar.low <= pos.stop_loss) or (not long and bar.high >= pos.stop_loss)
+        if stop_hit:
+            await self._exit(bar, reason="stop_loss", fill_price=pos.stop_loss)
+            return
+
+        tp_hit = (long and bar.high >= pos.take_profit) or (not long and bar.low <= pos.take_profit)
+        if tp_hit:
+            await self._exit(bar, reason="take_profit", fill_price=pos.take_profit)
+            return
+
+        if pos.max_hold_bars and pos.bars_held >= pos.max_hold_bars:
+            await self._exit(bar, reason="time_exit", fill_price=bar.close)
+            return
+
+        self._portfolio.update_excursion(bar.high, bar.low)
 
     async def _try_enter(self, signal, bar: Bar) -> None:
         equity = self._portfolio.equity(bar.close)
@@ -168,7 +189,9 @@ class LiveTradingEngine:
         if order is None:
             return
         fill = await self._exec.execute(order, bar, fill_price=bar.close)
-        self._portfolio.open_position(fill, order.stop_distance, order.trail_distance)
+        self._portfolio.open_position(
+            fill, order.stop_distance, order.tp_distance, order.max_hold_bars
+        )
 
     async def _exit(self, bar: Bar, reason: str, fill_price: float) -> None:
         pos = self._portfolio.position

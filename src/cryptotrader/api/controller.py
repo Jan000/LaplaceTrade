@@ -1,24 +1,11 @@
 # src/cryptotrader/api/controller.py
-"""Engine lifecycle controller behind the dashboard.
-
-Owns the single shared :class:`EngineState` / :class:`StateBroadcaster` and starts
-or stops a :class:`LiveTradingEngine` as a background asyncio task. The two run
-modes the dashboard can toggle between are:
-
-* ``simulation`` — replays synthetic (or cached) data through the *paper* handler.
-  Fully offline; great for demos and CI.
-* ``live``       — real ccxt market data through the *paper* handler by default
-  (no real orders), or the real ccxt order handler if ``real_orders`` is set and
-  API keys are present.
-
-Wiring the engine here (not in the route handlers) keeps the HTTP layer thin and
-makes the start/stop transitions race-free behind a single lock.
-"""
+"""Engine lifecycle controller behind the dashboard."""
 
 from __future__ import annotations
 
 import asyncio
 import logging
+from pathlib import Path
 
 from cryptotrader.config import RunMode, Settings
 from cryptotrader.data.features import MicrostructureFeatureEngine
@@ -62,12 +49,12 @@ class EngineController:
                 return
 
             feature_engine = self._build_feature_engine()
-            predictor = MomentumBaselinePredictor()
+            predictor = self._build_predictor()
             strategy = MLStrategy(
                 predictor, self.settings.strategy, self.settings.exchange.symbol,
                 feature_engine=feature_engine,
             )
-            risk = ATRRiskManager(self.settings.risk)
+            risk = ATRRiskManager(self.settings.risk, self.settings.barriers, self.settings.execution)
 
             if mode == "live":
                 feed = MarketDataFeed(
@@ -81,7 +68,7 @@ class EngineController:
                 execution = self._build_execution(real_orders)
                 self.settings.mode = RunMode.LIVE
             else:
-                ohlcv = make_synthetic_ohlcv(n=6000, seed=7)
+                ohlcv = self._simulation_ohlcv()
                 data_handler = ReplayDataHandler(ohlcv, delay=0.01)
                 execution = PaperExecutionHandler(self.settings.execution)
                 self.settings.mode = RunMode.BACKTEST
@@ -140,14 +127,7 @@ class EngineController:
             self.state.status = "stopped"
 
     def _build_feature_engine(self) -> MicrostructureFeatureEngine:
-        fc = self.settings.features
-        return MicrostructureFeatureEngine(
-            atr_period=fc.atr_period,
-            vwap_window=fc.vwap_window,
-            momentum_windows=fc.momentum_windows,
-            volume_spike_window=fc.volume_spike_window,
-            zscore_window=fc.zscore_window,
-        )
+        return MicrostructureFeatureEngine(**self.settings.features.model_dump())
 
     def _build_execution(self, real_orders: bool):
         if real_orders:
@@ -155,3 +135,24 @@ class EngineController:
 
             return CCXTExecutionHandler(self.settings.exchange, self.settings.execution)
         return PaperExecutionHandler(self.settings.execution)
+
+    def _build_predictor(self):
+        """Load the trained LightGBM model if configured, else the baseline."""
+        path = self.settings.strategy.model_path
+        if path is not None and Path(path).exists():
+            from cryptotrader.ml.model import LightGBMPredictor
+
+            logger.info("Loading trained model from %s", path)
+            return LightGBMPredictor().load(path)
+        logger.info("No trained model configured; using momentum baseline.")
+        return MomentumBaselinePredictor()
+
+    def _simulation_ohlcv(self):
+        """Real held-out data for replay if configured, else synthetic."""
+        replay = self.settings.data.replay_file
+        if replay is not None and Path(replay).exists():
+            import pandas as pd
+
+            logger.info("Replaying real data from %s", replay)
+            return pd.read_parquet(replay)
+        return make_synthetic_ohlcv(n=6000, seed=7)

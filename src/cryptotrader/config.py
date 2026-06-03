@@ -1,13 +1,11 @@
 # src/cryptotrader/config.py
 """Typed, layered runtime configuration.
 
-Configuration is loaded from ``config/config.yaml`` and overlaid with environment
-variables (prefix ``CT_``, nested via ``__``). Secrets such as exchange API keys
-MUST be supplied via the environment, never committed to the YAML file.
-
-Example
--------
-    CT_EXCHANGE__API_KEY=... CT_MODE=live python -m cryptotrader.api.server
+Every field can be overridden three ways (later wins):
+  1. defaults below
+  2. ``config/config.yaml``
+  3. environment variables, prefix ``CT_``, nested via ``__``
+     e.g. ``CT_RISK__MAX_LEVERAGE=2.0``  or  ``CT_MODEL__N_ESTIMATORS=800``
 """
 
 from __future__ import annotations
@@ -22,8 +20,6 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class RunMode(str, enum.Enum):
-    """Top-level execution mode of the bot."""
-
     BACKTEST = "backtest"
     LIVE = "live"
 
@@ -31,22 +27,75 @@ class RunMode(str, enum.Enum):
 class ExchangeConfig(BaseModel):
     id: str = "binance"
     symbol: str = "BTC/USDT"
-    timeframe: str = "1m"
+    timeframe: str = "15m"
     api_key: str | None = None
     api_secret: str | None = None
 
 
 class DataConfig(BaseModel):
-    history_days: int = 30
+    history_days: int = 365
     cache_dir: Path = Path(".cache/ohlcv")
+    replay_file: Path | None = None
 
 
 class FeatureConfig(BaseModel):
+    """Every indicator window — fully tunable. Names match the engine kwargs."""
+
     atr_period: int = 14
     vwap_window: int = 60
     momentum_windows: list[int] = Field(default_factory=lambda: [3, 5, 15])
+    extra_momentum: int = 30
     volume_spike_window: int = 30
     zscore_window: int = 60
+    rsi_fast: int = 7
+    rsi_slow: int = 30
+    macd_fast: int = 12
+    macd_slow: int = 26
+    macd_signal: int = 9
+    stoch_k: int = 14
+    stoch_d: int = 3
+    bollinger_window: int = 20
+    bollinger_std: float = 2.0
+    adx_period: int = 14
+    donchian: int = 20
+    parkinson: int = 20
+    obv_z: int = 30
+    amihud: int = 20
+    fracdiff_d: float = 0.4
+    fracdiff_window: int = 60
+
+
+class MLConfig(BaseModel):
+    """LightGBM hyperparameters + training controls (all tunable)."""
+
+    n_estimators: int = 400
+    learning_rate: float = 0.03
+    num_leaves: int = 63
+    max_depth: int = -1
+    min_child_samples: int = 50
+    subsample: float = 0.8
+    colsample_bytree: float = 0.8
+    reg_lambda: float = 1.0
+    class_weight: str | None = "balanced"   # "balanced" | None
+    eval_fraction: float = 0.2
+    test_fraction: float = 0.25             # held-out slice for evaluation
+
+    def to_lgbm_params(self) -> dict[str, Any]:
+        return {
+            "objective": "multiclass",
+            "num_class": 3,
+            "n_estimators": self.n_estimators,
+            "learning_rate": self.learning_rate,
+            "num_leaves": self.num_leaves,
+            "max_depth": self.max_depth,
+            "min_child_samples": self.min_child_samples,
+            "subsample": self.subsample,
+            "colsample_bytree": self.colsample_bytree,
+            "reg_lambda": self.reg_lambda,
+            "class_weight": self.class_weight,
+            "n_jobs": -1,
+            "verbosity": -1,
+        }
 
 
 class RiskConfig(BaseModel):
@@ -55,6 +104,9 @@ class RiskConfig(BaseModel):
     atr_stop_mult: float = 2.0
     atr_trail_mult: float = 1.5
     max_open_positions: int = 1
+    max_leverage: float = 1.0
+    min_edge_cost_ratio: float = 2.0
+    cooldown_bars: int = 3
 
 
 class ExecutionConfig(BaseModel):
@@ -63,9 +115,18 @@ class ExecutionConfig(BaseModel):
 
 
 class StrategyConfig(BaseModel):
-    long_threshold: float = 0.58
-    short_threshold: float = 0.58
+    long_threshold: float = 0.62
+    short_threshold: float = 0.62
     allow_short: bool = True
+    model_path: Path | None = None
+
+
+class BarrierConfig(BaseModel):
+    """Triple-barrier params shared by training labels and trade exits."""
+
+    tp_mult: float = 1.5
+    sl_mult: float = 1.0
+    horizon: int = 15
 
 
 class PersistenceConfig(BaseModel):
@@ -85,14 +146,15 @@ class Settings(BaseSettings):
     exchange: ExchangeConfig = Field(default_factory=ExchangeConfig)
     data: DataConfig = Field(default_factory=DataConfig)
     features: FeatureConfig = Field(default_factory=FeatureConfig)
+    model: MLConfig = Field(default_factory=MLConfig)
     risk: RiskConfig = Field(default_factory=RiskConfig)
     execution: ExecutionConfig = Field(default_factory=ExecutionConfig)
     strategy: StrategyConfig = Field(default_factory=StrategyConfig)
+    barriers: BarrierConfig = Field(default_factory=BarrierConfig)
     persistence: PersistenceConfig = Field(default_factory=PersistenceConfig)
 
     @classmethod
     def load(cls, path: str | Path = "config/config.yaml") -> "Settings":
-        """Load YAML defaults, then let environment variables take precedence."""
         raw: dict[str, Any] = {}
         cfg_path = Path(path)
         if cfg_path.exists():

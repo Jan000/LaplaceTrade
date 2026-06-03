@@ -82,8 +82,9 @@ class OrderEvent(Event):
     side: Side
     quantity: float
     order_type: OrderType = OrderType.MARKET
-    stop_distance: float = 0.0  # hard-stop distance from fill (atr_stop_mult * ATR)
-    trail_distance: float = 0.0  # trailing take-profit distance (atr_trail_mult * ATR)
+    stop_distance: float = 0.0  # hard-stop distance from fill (sl_mult * ATR)
+    tp_distance: float = 0.0    # fixed take-profit distance from fill (tp_mult * ATR)
+    max_hold_bars: int = 0      # vertical barrier: exit after N bars (0 = disabled)
     is_exit: bool = False
 
 

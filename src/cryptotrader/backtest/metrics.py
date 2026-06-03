@@ -16,8 +16,18 @@ from datetime import datetime
 
 from cryptotrader.core.types import Trade
 
-# 1-minute bars per year, used to annualise the per-bar Sharpe ratio.
-_BARS_PER_YEAR = 525_600
+# Minutes per timeframe, used to annualise the per-bar Sharpe ratio correctly
+# regardless of the candle size.
+_TIMEFRAME_MINUTES = {
+    "1m": 1, "3m": 3, "5m": 5, "15m": 15, "30m": 30, "1h": 60, "4h": 240, "1d": 1440,
+}
+_MINUTES_PER_YEAR = 365 * 24 * 60
+
+
+def bars_per_year_for(timeframe: str) -> float:
+    """Number of ``timeframe`` candles in a calendar year (for annualisation)."""
+    minutes = _TIMEFRAME_MINUTES.get(timeframe, 1)
+    return _MINUTES_PER_YEAR / minutes
 
 
 @dataclass(slots=True)
@@ -68,7 +78,7 @@ def _max_drawdown(equity: list[float]) -> float:
     return max_dd
 
 
-def _sharpe(equity: list[float]) -> float:
+def _sharpe(equity: list[float], bars_per_year: float) -> float:
     """Annualised Sharpe from the per-bar equity curve (rf = 0)."""
     if len(equity) < 3:
         return 0.0
@@ -85,7 +95,7 @@ def _sharpe(equity: list[float]) -> float:
     std = math.sqrt(var)
     if std == 0:
         return 0.0
-    return (mean / std) * math.sqrt(_BARS_PER_YEAR)
+    return (mean / std) * math.sqrt(bars_per_year)
 
 
 def _median(values: list[float]) -> float:
@@ -100,6 +110,7 @@ def compute_metrics(
     trades: list[Trade],
     equity_curve: list[tuple[datetime, float]],
     initial_equity: float,
+    bars_per_year: float = 525_600.0,
 ) -> PerformanceReport:
     """Build a :class:`PerformanceReport` from trades and the equity curve."""
     equity_values = [e for _, e in equity_curve] or [initial_equity]
@@ -125,7 +136,7 @@ def compute_metrics(
         profit_factor=(gross_win / gross_loss) if gross_loss > 0 else math.inf,
         avg_trade_pnl=(sum(t.net_pnl for t in trades) / n) if n else 0.0,
         max_drawdown_pct=_max_drawdown(equity_values) * 100.0,
-        sharpe_ratio=_sharpe(equity_values),
+        sharpe_ratio=_sharpe(equity_values, bars_per_year),
         avg_efficiency_ratio=(sum(efficiencies) / n) if n else 0.0,
         median_efficiency_ratio=_median(efficiencies),
         total_fees=sum(t.fees for t in trades),

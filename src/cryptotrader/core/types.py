@@ -1,9 +1,5 @@
 # src/cryptotrader/core/types.py
-"""Immutable / lightweight value types shared across the whole system.
-
-These objects are deliberately tiny and ``slots``-based: in the hot backtest loop
-millions of them may be created, so we avoid per-instance ``__dict__`` overhead.
-"""
+"""Immutable / lightweight value types shared across the whole system."""
 
 from __future__ import annotations
 
@@ -13,11 +9,7 @@ from datetime import datetime, timezone
 
 
 class Side(enum.IntEnum):
-    """Directional bias of a signal or position.
-
-    Encoded as integers so they can be multiplied directly with price deltas
-    when computing PnL (``pnl = side * (exit - entry)``).
-    """
+    """Directional bias of a signal or position."""
 
     FLAT = 0
     LONG = 1
@@ -31,17 +23,7 @@ class OrderType(enum.Enum):
 
 @dataclass(slots=True, frozen=True)
 class Bar:
-    """A single closed OHLCV candle.
-
-    Attributes
-    ----------
-    timestamp:
-        Close time of the candle (timezone-aware, UTC).
-    open, high, low, close:
-        Standard OHLC prices.
-    volume:
-        Base-asset volume traded during the candle.
-    """
+    """A single closed OHLCV candle."""
 
     timestamp: datetime
     open: float
@@ -59,17 +41,7 @@ class Bar:
 
 @dataclass(slots=True)
 class Prediction:
-    """Output of the ML engine for a single timestep.
-
-    Attributes
-    ----------
-    direction:
-        Discrete directional call (-1 short, 0 flat, +1 long).
-    confidence:
-        Calibrated probability / score in ``[0, 1]`` backing ``direction``.
-    raw:
-        Optional raw model output (e.g. class probabilities) for diagnostics.
-    """
+    """Output of the ML engine for a single timestep."""
 
     direction: Side
     confidence: float
@@ -87,12 +59,11 @@ class Position:
     entry_time: datetime
     stop_loss: float
     take_profit: float
-    # Trailing take-profit distance in price units (atr_trail_mult * ATR@entry).
     trail_distance: float = 0.0
-    # High-water / low-water mark of price while the position is open,
-    # used both for trailing stops and for the Max Efficiency Ratio.
-    mfe_price: float = 0.0  # most favourable excursion price seen so far
-    mae_price: float = 0.0  # most adverse excursion price seen so far
+    max_hold_bars: int = 0
+    bars_held: int = 0
+    mfe_price: float = 0.0
+    mae_price: float = 0.0
 
     def unrealized_pnl(self, price: float) -> float:
         """PnL in quote currency if the position were closed at ``price``."""
@@ -113,7 +84,6 @@ class Trade:
     fees: float
     gross_pnl: float
     net_pnl: float
-    # Best price reached between entry and exit (favourable direction).
     best_price: float
     exit_reason: str = "signal"
     efficiency_ratio: float = field(default=0.0)
