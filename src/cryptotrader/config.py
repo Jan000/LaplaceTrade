@@ -16,7 +16,15 @@ from typing import Any
 
 import yaml
 from pydantic import BaseModel, Field
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import (
+    BaseSettings,
+    SettingsConfigDict,
+    YamlConfigSettingsSource,
+)
+
+# Set by Settings.load() so the YAML source is only active for an explicit
+# load() (keeps a bare Settings() on pure defaults+env, which the tests rely on).
+_YAML_PATH: str | None = None
 
 
 class RunMode(str, enum.Enum):
@@ -76,9 +84,10 @@ class MLConfig(BaseModel):
     subsample: float = 0.8
     colsample_bytree: float = 0.8
     reg_lambda: float = 1.0
-    class_weight: str | None = "balanced"   # "balanced" | None
+    class_weight: str | None = None         # None | "balanced" (tunable)
     eval_fraction: float = 0.2
     test_fraction: float = 0.25             # held-out slice for evaluation
+    random_state: int = 42                  # fix for reproducible runs
 
     def to_lgbm_params(self) -> dict[str, Any]:
         return {
@@ -93,6 +102,7 @@ class MLConfig(BaseModel):
             "colsample_bytree": self.colsample_bytree,
             "reg_lambda": self.reg_lambda,
             "class_weight": self.class_weight,
+            "random_state": self.random_state,
             "n_jobs": -1,
             "verbosity": -1,
         }
@@ -140,6 +150,7 @@ class Settings(BaseSettings):
         env_prefix="CT_",
         env_nested_delimiter="__",
         extra="ignore",
+        nested_model_default_partial_update=True,
     )
 
     mode: RunMode = RunMode.BACKTEST
@@ -153,10 +164,24 @@ class Settings(BaseSettings):
     barriers: BarrierConfig = Field(default_factory=BarrierConfig)
     persistence: PersistenceConfig = Field(default_factory=PersistenceConfig)
 
+    # Source priority (first = highest): init kwargs > environment > YAML > defaults.
+    # This is what makes CT_* env vars actually override config.yaml.
+    @classmethod
+    def settings_customise_sources(cls, settings_cls, init_settings,
+                                   env_settings, dotenv_settings, file_secret_settings):
+        sources = [init_settings, env_settings]
+        if _YAML_PATH is not None:
+            sources.append(YamlConfigSettingsSource(settings_cls, yaml_file=_YAML_PATH))
+        sources.append(file_secret_settings)
+        return tuple(sources)
+
     @classmethod
     def load(cls, path: str | Path = "config/config.yaml") -> "Settings":
-        raw: dict[str, Any] = {}
+        """Load with precedence: environment overrides YAML overrides defaults."""
+        global _YAML_PATH
         cfg_path = Path(path)
-        if cfg_path.exists():
-            raw = yaml.safe_load(cfg_path.read_text(encoding="utf-8")) or {}
-        return cls(**raw)
+        _YAML_PATH = str(cfg_path) if cfg_path.exists() else None
+        try:
+            return cls()
+        finally:
+            _YAML_PATH = None

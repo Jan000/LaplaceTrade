@@ -31,7 +31,8 @@ set CT_RISK__RISK_PER_TRADE=0.005
 REM --- Model (LightGBM) ---
 set CT_MODEL__N_ESTIMATORS=800
 set CT_MODEL__LEARNING_RATE=0.02
-set CT_MODEL__CLASS_WEIGHT=balanced
+set CT_MODEL__RANDOM_STATE=42
+REM set CT_MODEL__CLASS_WEIGHT=balanced   (uncomment to A/B test balanced weighting)
 
 echo Training on %EXCHANGE% %SYMBOL% %TIMEFRAME%, %DAYS% days...
 python scripts\train_model.py --days %DAYS% --exchange %EXCHANGE% --symbol %SYMBOL% --timeframe %TIMEFRAME%

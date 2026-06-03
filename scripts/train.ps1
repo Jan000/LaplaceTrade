@@ -37,7 +37,8 @@ $env:CT_RISK__RISK_PER_TRADE      = "0.005" # 0.5% of equity risked per trade
 # --- Model (LightGBM) ---------------------------------------------------
 $env:CT_MODEL__N_ESTIMATORS  = "800"
 $env:CT_MODEL__LEARNING_RATE = "0.02"
-$env:CT_MODEL__CLASS_WEIGHT  = "balanced"   # or "null" for none
+$env:CT_MODEL__RANDOM_STATE  = "42"         # fixed seed => reproducible, comparable runs
+# $env:CT_MODEL__CLASS_WEIGHT = "balanced"  # uncomment to A/B test balanced weighting
 
 # --- Run ----------------------------------------------------------------
 Write-Host "Training on $Exchange $Symbol $Timeframe, $Days days..." -ForegroundColor Cyan

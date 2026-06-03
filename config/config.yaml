@@ -52,7 +52,8 @@ model:
   subsample: 0.8
   colsample_bytree: 0.8
   reg_lambda: 1.0
-  class_weight: balanced  # "balanced" boosts directional recall on imbalanced labels; or null
+  class_weight: null      # null = off; "balanced" upweights directional classes (A/B test it)
+  random_state: 42        # fix the seed so runs are reproducible & comparable
   eval_fraction: 0.2      # validation slice inside the training data
   test_fraction: 0.25     # held-out slice for the final evaluation/backtest
 
