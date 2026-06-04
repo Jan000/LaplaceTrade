@@ -187,14 +187,27 @@ def main() -> None:
     train_labels = train_labels.loc[valid]
 
     # --- Train + save (all hyperparameters come from MLConfig) -------------
-    predictor = LightGBMPredictor(settings.model.to_lgbm_params())
-    metrics = predictor.train(
-        train_feats, train_labels, eval_fraction=settings.model.eval_fraction
-    )
     out_path = Path(args.out)
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    predictor.save(out_path)
-    logger.info("Saved model to %s (val_accuracy=%.3f)", out_path, metrics["val_accuracy"])
+    if settings.model.use_meta_labeling:
+        from cryptotrader.ml.meta import train_meta_labeled
+
+        predictor, info = train_meta_labeled(
+            train_feats, train_labels, settings.model.to_lgbm_params(),
+            eval_fraction=settings.model.eval_fraction, embargo=settings.barriers.horizon,
+        )
+        predictor.save(out_path)
+        logger.info(
+            "Saved META-LABELED model to %s (meta acc=%.3f, base win-rate=%.3f)",
+            out_path, info["meta_train_accuracy"], info["primary_win_base_rate"],
+        )
+    else:
+        predictor = LightGBMPredictor(settings.model.to_lgbm_params())
+        metrics = predictor.train(
+            train_feats, train_labels, eval_fraction=settings.model.eval_fraction
+        )
+        predictor.save(out_path)
+        logger.info("Saved model to %s (val_accuracy=%.3f)", out_path, metrics["val_accuracy"])
 
     # --- Persist the held-out slice for the dashboard ----------------------
     replay_path = out_path.parent / "holdout.parquet"
@@ -202,7 +215,9 @@ def main() -> None:
     logger.info("Saved held-out slice for dashboard replay to %s", replay_path)
 
     # --- Evaluate on the held-out slice: model vs baseline -----------------
-    model_report = backtest(settings, test_ohlcv, LightGBMPredictor().load(out_path))
+    from cryptotrader.ml.meta import load_predictor  # auto-detects meta vs plain
+
+    model_report = backtest(settings, test_ohlcv, load_predictor(out_path))
     base_report = backtest(settings, test_ohlcv, MomentumBaselinePredictor())
 
     print("\n================ HOLD-OUT EVALUATION ================")

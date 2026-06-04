@@ -140,10 +140,10 @@ class EngineController:
         """Load the trained LightGBM model if configured, else the baseline."""
         path = self.settings.strategy.model_path
         if path is not None and Path(path).exists():
-            from cryptotrader.ml.model import LightGBMPredictor
+            from cryptotrader.ml.meta import load_predictor  # auto-detects meta vs plain
 
             logger.info("Loading trained model from %s", path)
-            return LightGBMPredictor().load(path)
+            return load_predictor(path)
         logger.info("No trained model configured; using momentum baseline.")
         return MomentumBaselinePredictor()
 

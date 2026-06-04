@@ -56,6 +56,7 @@ model:
   random_state: 42        # fix the seed so runs are reproducible & comparable
   eval_fraction: 0.2      # validation slice inside the training data
   test_fraction: 0.25     # held-out slice for the final evaluation/backtest
+  use_meta_labeling: false  # secondary "should I act?" model (Lopez de Prado); try true
 
 risk:
   account_equity: 10000.0

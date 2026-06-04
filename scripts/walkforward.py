@@ -61,13 +61,21 @@ async def load_ohlcv(settings: Settings, args: argparse.Namespace):
         await feed.close()
 
 
-def train_predictor(settings: Settings, train_ohlcv) -> LightGBMPredictor:
+def train_predictor(settings: Settings, train_ohlcv):
     feats = feature_engine(settings).transform(train_ohlcv)
     labels = make_triple_barrier_labels(
         train_ohlcv, feats["atr"], horizon=settings.barriers.horizon,
         tp_mult=settings.barriers.tp_mult, sl_mult=settings.barriers.sl_mult,
     )
     valid = labels.index[: len(labels) - settings.barriers.horizon]
+    if settings.model.use_meta_labeling:
+        from cryptotrader.ml.meta import train_meta_labeled
+
+        predictor, _ = train_meta_labeled(
+            feats.loc[valid], labels.loc[valid], settings.model.to_lgbm_params(),
+            eval_fraction=settings.model.eval_fraction, embargo=settings.barriers.horizon,
+        )
+        return predictor
     predictor = LightGBMPredictor(settings.model.to_lgbm_params())
     predictor.train(feats.loc[valid], labels.loc[valid], eval_fraction=settings.model.eval_fraction)
     return predictor

@@ -88,6 +88,7 @@ class MLConfig(BaseModel):
     eval_fraction: float = 0.2
     test_fraction: float = 0.25             # held-out slice for evaluation
     random_state: int = 42                  # fix for reproducible runs
+    use_meta_labeling: bool = False         # add a secondary "should I act?" model
 
     def to_lgbm_params(self) -> dict[str, Any]:
         return {
