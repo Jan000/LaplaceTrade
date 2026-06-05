@@ -319,6 +319,12 @@ class MicrostructureFeatureEngine(FeatureCalculator):
                 feats["cross_corr"] = zero
                 feats["rel_strength"] = zero
 
+        for _ext in ("taker_buy_ratio", "taker_flow_z", "trade_intensity_z",
+                     "avg_trade_size_z", "funding_rate", "funding_z", "oi_change",
+                     "oi_z", "cross_ret", "cross_corr", "rel_strength"):
+            if _ext in feats:
+                feats[_ext] = feats[_ext].fillna(0.0)
+
         frame = pd.DataFrame(feats, index=ohlcv.index)
         # atr is kept as a trailing helper column (labels + ATR sizing); it is
         # NOT a model feature (raw atr is price-scaled / non-stationary).
