@@ -121,8 +121,31 @@ def main() -> None:
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.WARNING, format="%(levelname)s %(name)s: %(message)s")
+    # Surface data-source merge info even at WARNING level.
+    logging.getLogger("cryptotrader.data.sources").setLevel(logging.INFO)
     settings = Settings.load()
     ohlcv = asyncio.run(load_ohlcv(settings, args))
+
+    # --- Data-source diagnostic: make it unmistakable what is actually active.
+    fe_probe = feature_engine(settings)
+    flags = {
+        "taker_flow": settings.features.use_taker_flow,
+        "funding": settings.features.use_funding,
+        "open_interest": settings.features.use_open_interest,
+        "cross_asset": settings.features.use_cross_asset,
+    }
+    on = [k for k, v in flags.items() if v]
+    print(f"Extra sources enabled: {on or 'none'}  |  model features: {len(fe_probe.feature_names)}")
+    for col in ("taker_buy_base", "num_trades", "funding_rate", "open_interest", "cross_close"):
+        if col in ohlcv.columns:
+            nn = int(ohlcv[col].notna().sum())
+            print(f"  column '{col}': {nn}/{len(ohlcv)} rows non-null"
+                  + ("  <-- LOADED" if nn > len(ohlcv) // 2 else "  <-- MOSTLY EMPTY"))
+    if on and not any(c in ohlcv.columns for c in
+                      ("taker_buy_base", "funding_rate", "open_interest", "cross_close")):
+        print("  WARNING: sources enabled but NO source columns present "
+              "-> the fetch returned nothing (features will be neutral 0).")
+    print()
 
     total = len(ohlcv)
     initial = int(total * args.train_frac)

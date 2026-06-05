@@ -33,16 +33,22 @@ def _align(series: pd.Series, index: pd.DatetimeIndex) -> pd.Series:
     if series is None or series.empty:
         return pd.Series(index=index, dtype=float)
     s = series[~series.index.duplicated(keep="last")].sort_index()
-    return s.reindex(s.index.union(index)).ffill().reindex(index)
+    return s.reindex(s.index.union(index)).ffill().reindex(index).ffill().bfill()
 
 
 async def fetch_taker_flow(client, market_id: str, timeframe: str,
                            start_ms: int, end_ms: int) -> pd.DataFrame:
     """Binance raw klines -> taker_buy_base + num_trades columns (UTC-indexed)."""
+    getter = getattr(client, "publicGetKlines", None) or getattr(client, "public_get_klines", None)
+    if getter is None:
+        raise RuntimeError(
+            f"{client.id} has no raw-klines endpoint; taker flow is Binance-only. "
+            "Disable use_taker_flow or use exchange=binance."
+        )
     rows: list = []
     since = start_ms
     while since < end_ms:
-        batch = await client.publicGetKlines(
+        batch = await getter(
             {"symbol": market_id, "interval": timeframe, "startTime": since, "limit": 1000}
         )
         if not batch:
@@ -123,8 +129,8 @@ async def enrich_ohlcv(settings, ohlcv: pd.DataFrame, start: datetime, feed) -> 
             market_id = symbol.replace("/", "")
             flow = await fetch_taker_flow(client, market_id, tf, start_ms, end_ms)
             if not flow.empty:
-                out["taker_buy_base"] = flow["taker_buy_base"].reindex(out.index)
-                out["num_trades"] = flow["num_trades"].reindex(out.index)
+                out["taker_buy_base"] = flow["taker_buy_base"].reindex(out.index).ffill().bfill()
+                out["num_trades"] = flow["num_trades"].reindex(out.index).ffill().bfill()
                 logger.info("Merged taker-flow (%d rows)", len(flow))
         except Exception:
             logger.warning("taker_flow source unavailable; skipping.", exc_info=True)
