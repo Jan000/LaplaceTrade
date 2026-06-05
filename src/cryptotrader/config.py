@@ -116,8 +116,10 @@ class RiskConfig(BaseModel):
     atr_trail_mult: float = 1.5
     max_open_positions: int = 1
     max_leverage: float = 1.0
-    min_edge_cost_ratio: float = 2.0
+    min_edge_cost_ratio: float = 2.0   # legacy filter (used when use_ev_filter=False)
     cooldown_bars: int = 3
+    use_ev_filter: bool = False        # EV gate: P(win)*tp-(1-P(win))*sl-cost > min_ev
+    min_expected_value: float = 0.0    # minimum expected value per unit to trade
 
 
 class ExecutionConfig(BaseModel):

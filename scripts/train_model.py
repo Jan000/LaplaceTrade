@@ -46,6 +46,7 @@ from cryptotrader.execution.simulated import SimulatedExecutionHandler  # noqa: 
 from cryptotrader.ml.model import (  # noqa: E402
     LightGBMPredictor,
     MomentumBaselinePredictor,
+    make_sample_weights,
     make_triple_barrier_labels,
 )
 from cryptotrader.risk.manager import ATRRiskManager  # noqa: E402
@@ -174,17 +175,20 @@ def main() -> None:
     test_ohlcv = ohlcv.iloc[split:]
     logger.info("Split: %d train bars, %d test bars", len(train_ohlcv), len(test_ohlcv))
 
-    # --- Features + triple-barrier labels on the TRAIN slice --------------
+    # --- Features + triple-barrier labels (+ uniqueness weights) ----------
     fe = build_feature_engine(settings)
     train_feats = fe.transform(train_ohlcv)
-    train_labels = make_triple_barrier_labels(
+    train_labels, t1 = make_triple_barrier_labels(
         train_ohlcv, train_feats["atr"], horizon=settings.barriers.horizon,
         tp_mult=settings.barriers.tp_mult, sl_mult=settings.barriers.sl_mult,
+        return_events=True,
     )
+    weights = make_sample_weights(t1)  # down-weight overlapping (non-unique) labels
     # Drop the last `horizon` rows: their forward window is incomplete.
     valid = train_labels.index[: len(train_labels) - settings.barriers.horizon]
     train_feats = train_feats.loc[valid]
     train_labels = train_labels.loc[valid]
+    train_weights = weights.loc[valid]
 
     # --- Train + save (all hyperparameters come from MLConfig) -------------
     out_path = Path(args.out)
@@ -195,6 +199,7 @@ def main() -> None:
         predictor, info = train_meta_labeled(
             train_feats, train_labels, settings.model.to_lgbm_params(),
             eval_fraction=settings.model.eval_fraction, embargo=settings.barriers.horizon,
+            sample_weight=train_weights,
         )
         predictor.save(out_path)
         logger.info(
@@ -204,7 +209,8 @@ def main() -> None:
     else:
         predictor = LightGBMPredictor(settings.model.to_lgbm_params())
         metrics = predictor.train(
-            train_feats, train_labels, eval_fraction=settings.model.eval_fraction
+            train_feats, train_labels, eval_fraction=settings.model.eval_fraction,
+            sample_weight=train_weights,
         )
         predictor.save(out_path)
         logger.info("Saved model to %s (val_accuracy=%.3f)", out_path, metrics["val_accuracy"])

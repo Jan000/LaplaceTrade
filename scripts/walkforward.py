@@ -33,7 +33,11 @@ from cryptotrader.config import Settings  # noqa: E402
 from cryptotrader.data.features import MicrostructureFeatureEngine  # noqa: E402
 from cryptotrader.data.ingestion import MarketDataFeed, make_synthetic_ohlcv  # noqa: E402
 from cryptotrader.execution.simulated import SimulatedExecutionHandler  # noqa: E402
-from cryptotrader.ml.model import LightGBMPredictor, make_triple_barrier_labels  # noqa: E402
+from cryptotrader.ml.model import (  # noqa: E402
+    LightGBMPredictor,
+    make_sample_weights,
+    make_triple_barrier_labels,
+)
 from cryptotrader.risk.manager import ATRRiskManager  # noqa: E402
 from cryptotrader.strategy.ml_strategy import MLStrategy  # noqa: E402
 
@@ -63,10 +67,12 @@ async def load_ohlcv(settings: Settings, args: argparse.Namespace):
 
 def train_predictor(settings: Settings, train_ohlcv):
     feats = feature_engine(settings).transform(train_ohlcv)
-    labels = make_triple_barrier_labels(
+    labels, t1 = make_triple_barrier_labels(
         train_ohlcv, feats["atr"], horizon=settings.barriers.horizon,
         tp_mult=settings.barriers.tp_mult, sl_mult=settings.barriers.sl_mult,
+        return_events=True,
     )
+    weights = make_sample_weights(t1)
     valid = labels.index[: len(labels) - settings.barriers.horizon]
     if settings.model.use_meta_labeling:
         from cryptotrader.ml.meta import train_meta_labeled
@@ -74,10 +80,12 @@ def train_predictor(settings: Settings, train_ohlcv):
         predictor, _ = train_meta_labeled(
             feats.loc[valid], labels.loc[valid], settings.model.to_lgbm_params(),
             eval_fraction=settings.model.eval_fraction, embargo=settings.barriers.horizon,
+            sample_weight=weights.loc[valid],
         )
         return predictor
     predictor = LightGBMPredictor(settings.model.to_lgbm_params())
-    predictor.train(feats.loc[valid], labels.loc[valid], eval_fraction=settings.model.eval_fraction)
+    predictor.train(feats.loc[valid], labels.loc[valid],
+                    eval_fraction=settings.model.eval_fraction, sample_weight=weights.loc[valid])
     return predictor
 
 

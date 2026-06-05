@@ -26,12 +26,13 @@ $env:CT_BARRIERS__TP_MULT = "1.5"   # take-profit in ATR
 $env:CT_BARRIERS__SL_MULT = "1.0"   # stop-loss in ATR
 $env:CT_BARRIERS__HORIZON = "15"    # time-exit after N bars
 
-# --- Strategy entry thresholds (higher = fewer, better trades) ----------
-$env:CT_STRATEGY__LONG_THRESHOLD  = "0.64"
-$env:CT_STRATEGY__SHORT_THRESHOLD = "0.64"
+# --- Strategy entry thresholds (permissive; the EV gate is the real filter)
+$env:CT_STRATEGY__LONG_THRESHOLD  = "0.50"
+$env:CT_STRATEGY__SHORT_THRESHOLD = "0.50"
 
 # --- Risk / cost control ------------------------------------------------
-$env:CT_RISK__MIN_EDGE_COST_RATIO = "8.0"   # only trade if TP target >= 8x cost
+$env:CT_RISK__USE_EV_FILTER       = "true"  # EV gate (needs meta for real P(win))
+$env:CT_RISK__MIN_EXPECTED_VALUE  = "0.0"   # raise above 0 for a safety margin
 $env:CT_RISK__MAX_LEVERAGE        = "1.0"   # cap notional at 1x equity
 $env:CT_RISK__COOLDOWN_BARS       = "3"     # wait N bars after a trade
 $env:CT_RISK__RISK_PER_TRADE      = "0.005" # 0.5% of equity risked per trade
@@ -41,9 +42,10 @@ $env:CT_RISK__RISK_PER_TRADE      = "0.005" # 0.5% of equity risked per trade
 # $env:CT_EXECUTION__TAKER_FEE = "0.0002"
 
 # --- Model (LightGBM) ---------------------------------------------------
-$env:CT_MODEL__N_ESTIMATORS  = "800"
-$env:CT_MODEL__LEARNING_RATE = "0.02"
-$env:CT_MODEL__RANDOM_STATE  = "42"         # fixed seed => reproducible, comparable runs
+$env:CT_MODEL__N_ESTIMATORS    = "800"
+$env:CT_MODEL__LEARNING_RATE   = "0.02"
+$env:CT_MODEL__RANDOM_STATE    = "42"        # fixed seed => reproducible, comparable runs
+$env:CT_MODEL__USE_META_LABELING = "true"    # secondary win/lose model; EV gate needs it
 # $env:CT_MODEL__CLASS_WEIGHT = "balanced"  # uncomment to A/B test balanced weighting
 
 # --- Run ----------------------------------------------------------------

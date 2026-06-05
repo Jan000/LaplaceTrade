@@ -14,7 +14,9 @@ def test_feature_names_and_shape() -> None:
     ohlcv = make_synthetic_ohlcv(n=500, seed=1)
     fe = MicrostructureFeatureEngine()
     feats = fe.transform(ohlcv)
-    assert list(feats.columns) == fe.feature_names
+    # transform returns the model features plus the "atr" helper column.
+    assert list(feats.columns) == fe.feature_names + ["atr"]
+    assert "atr" not in fe.feature_names
     assert len(feats) == len(ohlcv)
 
 

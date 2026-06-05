@@ -110,6 +110,7 @@ def train_meta_labeled(
     eval_fraction: float = 0.2,
     embargo: int = 15,
     meta_params: dict | None = None,
+    sample_weight: pd.Series | None = None,
 ) -> tuple[MetaLabeledPredictor, dict[str, float]]:
     """Train primary + meta with out-of-fold meta-labels.
 
@@ -139,7 +140,8 @@ def train_meta_labeled(
     half = n // 2
     # 1) Primary on the first half, OOF predictions on the (embargoed) second half.
     primary_oof = LightGBMPredictor(lgbm_params)
-    primary_oof.train(X.iloc[:half], y.iloc[:half], eval_fraction=eval_fraction)
+    primary_oof.train(X.iloc[:half], y.iloc[:half], eval_fraction=eval_fraction,
+                      sample_weight=sample_weight)
 
     b_start = min(half + embargo, n - 1)
     Xb, yb = X.iloc[b_start:], y.iloc[b_start:]
@@ -156,7 +158,8 @@ def train_meta_labeled(
     # Meta label: 1 if the directional bet hit its take-profit barrier.
     meta_y = (np.sign(yb.to_numpy()[fired]) == pdir[fired]).astype(int)
 
-    cols = list(features.columns) + _META_EXTRA
+    feat_cols = [c for c in features.columns if c != "atr"]
+    cols = feat_cols + _META_EXTRA
     meta = lgb.LGBMClassifier(**(meta_params or _DEFAULT_META_PARAMS))
     meta.fit(meta_X[cols], meta_y)
     meta_acc = float((meta.predict(meta_X[cols]) == meta_y).mean())
@@ -164,12 +167,12 @@ def train_meta_labeled(
 
     # 2) Ship a primary refit on ALL training data, wrapped with the meta-model.
     final_primary = LightGBMPredictor(lgbm_params)
-    final_primary.train(X, y, eval_fraction=eval_fraction)
+    final_primary.train(X, y, eval_fraction=eval_fraction, sample_weight=sample_weight)
     logger.info(
         "Meta-labeling: meta train acc=%.3f vs base win-rate=%.3f on %d fired bars",
         meta_acc, base_rate, int(fired.sum()),
     )
-    return MetaLabeledPredictor(final_primary, meta, list(features.columns)), {
+    return MetaLabeledPredictor(final_primary, meta, feat_cols), {
         "meta_train_accuracy": meta_acc,
         "primary_win_base_rate": base_rate,
         "n_meta_samples": float(fired.sum()),

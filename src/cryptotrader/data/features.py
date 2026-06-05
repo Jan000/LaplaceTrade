@@ -260,7 +260,9 @@ class MicrostructureFeatureEngine(FeatureCalculator):
             feats["hour_cos"] = pd.Series(0.0, index=idx)
 
         frame = pd.DataFrame(feats, index=ohlcv.index)
-        return frame[self._names]
+        # atr is kept as a trailing helper column (labels + ATR sizing); it is
+        # NOT a model feature (raw atr is price-scaled / non-stationary).
+        return frame[self._names + ["atr"]]
 
     def update(self, bar: Bar) -> pd.Series | None:
         self._buffer.append(bar)
@@ -285,7 +287,7 @@ class MicrostructureFeatureEngine(FeatureCalculator):
         names += [
             f"mom_{self.extra_momentum}", "mom_accel", "rsi", "rsi_fast", "rsi_slow",
             "macd", "macd_signal", "macd_hist", "adx", "di_diff",
-            "atr", "atr_pct", "realized_vol", "range_pct", "parkinson_vol",
+            "atr_pct", "realized_vol", "range_pct", "parkinson_vol",
             "vwap_dev", "vwap_dev_z", "price_z", "boll_pctb", "boll_bw",
             "stoch_k", "stoch_d", "donchian_pos", "fracdiff",
             "clv", "ofi_z", "obv_z", "amihud", "vol_z", "vol_ratio",

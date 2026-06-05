@@ -1,5 +1,5 @@
 # src/cryptotrader/risk/manager.py
-"""ATR-based risk manager with explicit cost control.
+"""ATR-based risk manager with an expected-value entry gate.
 
 Sizing (fixed-fractional, volatility-normalised):
 
@@ -7,15 +7,17 @@ Sizing (fixed-fractional, volatility-normalised):
     stop_distance = sl_mult * ATR
     quantity      = risk_amount / stop_distance      # then capped by leverage
 
-Two cost-control gates address the dominant failure mode of 1m/15m intraday
-trading — fees and slippage scale with *notional*, which the ATR-scaled size can
-blow up in calm regimes until each round trip costs as much as it risks:
+Entry gate
+----------
+With meta-labeling the signal carries ``confidence = P(win)``. The principled,
+cost-aware filter is then **expected value**:
 
-* **Leverage cap** — notional is capped at ``max_leverage * equity`` so per-trade
-  cost stays proportional to capital instead of exploding when ATR is small.
-* **Cost-aware edge filter** — a trade is only taken if its take-profit target
-  (``tp_mult * ATR``) clears the estimated round-trip cost by a safety factor,
-  so low-volatility bars whose expected edge can't beat costs are skipped.
+    EV = P(win) * tp_distance - (1 - P(win)) * sl_distance - round_trip_cost
+
+Trade only when ``EV > min_expected_value``. Unlike the older cost-ratio filter,
+EV does not loosen when fees fall (it folds the cost in directly), so it self-
+calibrates to the execution cost. The legacy ``min_edge_cost_ratio`` filter
+remains available when ``use_ev_filter`` is off.
 """
 
 from __future__ import annotations
@@ -27,7 +29,7 @@ from cryptotrader.core.types import Bar, OrderType, Side
 
 
 class ATRRiskManager(RiskManager):
-    """Volatility-scaled sizing with leverage cap and cost-aware filtering."""
+    """Volatility-scaled sizing with leverage cap and an EV (or cost-ratio) gate."""
 
     def __init__(
         self,
@@ -67,19 +69,21 @@ class ATRRiskManager(RiskManager):
         if stop_distance <= 0.0:
             return None
 
-        # Cost-aware edge filter: skip trades whose target can't clear costs.
-        if self.config.min_edge_cost_ratio > 0.0:
-            min_edge = self.config.min_edge_cost_ratio * self._round_trip_cost_per_unit(price)
-            if tp_distance < min_edge:
+        cost = self._round_trip_cost_per_unit(price)
+        if self.config.use_ev_filter:
+            # P(win) from the (meta) predictor's confidence.
+            p_win = max(0.0, min(1.0, signal.confidence))
+            ev = p_win * tp_distance - (1.0 - p_win) * stop_distance - cost
+            if ev <= self.config.min_expected_value:
+                return None
+        elif self.config.min_edge_cost_ratio > 0.0:
+            if tp_distance < self.config.min_edge_cost_ratio * cost:
                 return None
 
         risk_amount = equity * self.config.risk_per_trade
         quantity = risk_amount / stop_distance
-
-        # Leverage cap: notional must not exceed max_leverage * equity.
         if self.config.max_leverage > 0.0 and price > 0.0:
-            max_qty = self.config.max_leverage * equity / price
-            quantity = min(quantity, max_qty)
+            quantity = min(quantity, self.config.max_leverage * equity / price)
         if quantity <= 0.0:
             return None
 

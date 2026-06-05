@@ -27,6 +27,7 @@ from cryptotrader.execution.simulated import SimulatedExecutionHandler  # noqa: 
 from cryptotrader.ml.model import (  # noqa: E402
     LightGBMPredictor,
     MomentumBaselinePredictor,
+    make_sample_weights,
     make_triple_barrier_labels,
 )
 from cryptotrader.risk.manager import ATRRiskManager  # noqa: E402
@@ -52,12 +53,15 @@ def main() -> None:
 
     if args.lgbm:
         features = feature_engine.transform(ohlcv)
-        labels = make_triple_barrier_labels(
+        labels, t1 = make_triple_barrier_labels(
             ohlcv, features["atr"], horizon=settings.barriers.horizon,
             tp_mult=settings.barriers.tp_mult, sl_mult=settings.barriers.sl_mult,
+            return_events=True,
         )
+        weights = make_sample_weights(t1)
         predictor: object = LightGBMPredictor(settings.model.to_lgbm_params())
-        predictor.train(features, labels, eval_fraction=settings.model.eval_fraction)  # type: ignore[attr-defined]
+        predictor.train(features, labels, eval_fraction=settings.model.eval_fraction,  # type: ignore[attr-defined]
+                        sample_weight=weights)
     else:
         predictor = MomentumBaselinePredictor()
 
