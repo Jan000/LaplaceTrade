@@ -60,7 +60,12 @@ async def load_ohlcv(settings: Settings, args: argparse.Namespace):
     )
     start = datetime.now(tz=timezone.utc) - timedelta(days=days)
     try:
-        return await feed.fetch_history(start)
+        df = await feed.fetch_history(start)
+        if not df.empty:
+            from cryptotrader.data.sources import enrich_ohlcv
+
+            df = await enrich_ohlcv(settings, df, start, feed)
+        return df
     finally:
         await feed.close()
 

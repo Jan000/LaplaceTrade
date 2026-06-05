@@ -80,6 +80,10 @@ async def load_ohlcv(settings: Settings, args: argparse.Namespace) -> pd.DataFra
     start = datetime.now(tz=timezone.utc) - timedelta(days=days)
     try:
         df = await feed.fetch_history(start)
+        if not df.empty:
+            from cryptotrader.data.sources import enrich_ohlcv
+
+            df = await enrich_ohlcv(settings, df, start, feed)  # optional extra sources
     except Exception as exc:  # network / TLS / proxy / geo-block / bad symbol
         cause = exc.__cause__
         cause_txt = f"{type(cause).__name__}: {cause}" if cause is not None else "(none)"

@@ -71,6 +71,14 @@ class FeatureConfig(BaseModel):
     amihud: int = 20
     fracdiff_d: float = 0.4
     fracdiff_window: int = 60
+    # --- Optional extra data sources (all opt-in; features computed only when
+    # the source columns are present in the OHLCV frame) ---
+    use_taker_flow: bool = False     # taker buy/sell volume + trade count (Binance klines)
+    use_funding: bool = False        # perpetual funding rate
+    use_open_interest: bool = False  # perpetual open interest
+    use_cross_asset: bool = False    # a second asset's return + rolling correlation
+    cross_symbol: str = "ETH/USDT"   # symbol for the cross-asset features
+    cross_corr_window: int = 60      # rolling window for cross-asset correlation
 
 
 class MLConfig(BaseModel):
