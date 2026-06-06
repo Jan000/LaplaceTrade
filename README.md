@@ -72,6 +72,46 @@ free-text), sortable by any column, with CSV export.
   confirm-gated **real orders** toggle (live mode only) to place REAL orders via
   `CCXTExecutionHandler` — this requires saved API keys and trades live funds.
 
+## Using it as a trader — step by step
+
+The whole flow lives in the dashboard. **Environments**: every run is tagged
+`simulation` (replay + paper fills), `paper` (real market data + simulated fills) or
+`live` (REAL orders, real money). The Trades & Analytics tab lets you view each
+separately, so test runs never pollute your real track record.
+
+1. **Launch & open** — `uvicorn cryptotrader.api.server:app`, open
+   http://127.0.0.1:8000.
+2. **Configure** (Settings & Training → All Parameters): set `exchange.id`,
+   `exchange.symbol`, `exchange.timeframe`, and review **risk** —
+   `risk.account_equity` (your starting capital), `risk.risk_per_trade` (e.g. 0.005 =
+   0.5%/trade), `risk.max_leverage` (keep 1.0 to start) — and `execution.taker_fee` /
+   `slippage_bps` to match your exchange tier. **Save to config.yaml**.
+3. **Train** — click **Train now**; wait until the model-status line shows a *trained*
+   model. (Re-train after any feature/model/barrier change.)
+4. **Validate** — run **walk-forward** (and **holdout**). Only go further if the verdict
+   is ROBUST / positive out of sample. This is your edge check — don't skip it.
+5. **Paper-test on live data** — header: mode **Live**, leave **real orders OFF**, press
+   **Start**. Watch the Monitor; let it run long enough to see real-time behaviour. No
+   funds are at risk.
+6. **Connect your account** — Settings → **Exchange API Keys**: paste the API key/secret
+   for `exchange.id`. On the exchange, create a key that **allows spot trading but NOT
+   withdrawals**, and ideally restrict it to your server's IP. Keys are stored only in
+   git-ignored `config/secrets.yaml`, never echoed back.
+7. **Go live (real money)** — header: mode **Live**, tick **real orders**, press
+   **Start**, confirm the prompt. The header shows **⚠ REAL MONEY** while it runs. Start
+   small (low `risk_per_trade`, `max_leverage` 1.0).
+8. **Monitor & analyse** — Monitor tab for the live run; **Trades & Analytics → Environment
+   = Real money** for your real track record (stats, full filterable trade log, CSV).
+9. **Maintain** — re-train on a rolling window periodically and re-validate; **Stop** to
+   flatten new decisions.
+
+> ⚠️ **Operational risk.** Exits (stop-loss / take-profit / time-exit) are driven by the
+> running engine, not by native exchange orders. **If the server is stopped while a real
+> position is open, that position is left unmanaged.** Keep the process running (and the
+> position size small) until native exchange-side protective orders are added. This is an
+> MVP — paper-trade extensively before risking real capital, and never trade money you
+> can't afford to lose.
+
 ## Live engine
 
 `cryptotrader.live.LiveTradingEngine` is the streaming counterpart of the
