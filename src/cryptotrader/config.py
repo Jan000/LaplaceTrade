@@ -44,6 +44,10 @@ class DataConfig(BaseModel):
     history_days: int = 365
     cache_dir: Path = Path(".cache/ohlcv")
     replay_file: Path | None = None
+    # Extra symbols pooled into the TRAINING set (the primary exchange.symbol is still
+    # what gets traded/tested). More + more diverse data fights overfitting on the small
+    # higher-timeframe history. Empty list = single-symbol behaviour.
+    train_symbols: list[str] = Field(default_factory=list)
 
 
 class FeatureConfig(BaseModel):

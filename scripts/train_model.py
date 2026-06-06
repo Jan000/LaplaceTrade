@@ -112,6 +112,28 @@ async def load_ohlcv(settings: Settings, args: argparse.Namespace) -> pd.DataFra
     return df
 
 
+async def load_extra_symbols(settings: Settings, args: argparse.Namespace) -> dict:
+    """Fetch each ``data.train_symbols`` symbol (same timeframe/window) for training pooling."""
+    out: dict = {}
+    days = args.days if args.days is not None else settings.data.history_days
+    start = datetime.now(tz=timezone.utc) - timedelta(days=days)
+    primary = args.symbol or settings.exchange.symbol
+    for sym in settings.data.train_symbols:
+        if sym == primary:
+            continue
+        feed = MarketDataFeed(
+            exchange_id=args.exchange or settings.exchange.id, symbol=sym,
+            timeframe=settings.exchange.timeframe, cache_dir=settings.data.cache_dir,
+        )
+        try:
+            d = await feed.fetch_history(start)
+            if not d.empty:
+                out[sym] = d
+        finally:
+            await feed.close()
+    return out
+
+
 def backtest(settings: Settings, ohlcv: pd.DataFrame, predictor) -> dict:
     """Run a backtest of ``predictor`` over ``ohlcv`` and return the report dict."""
     fe = build_feature_engine(settings)
@@ -180,20 +202,32 @@ def main() -> None:
     logger.info("Split: %d train bars, %d test bars", len(train_ohlcv), len(test_ohlcv))
 
     # --- Features + triple-barrier labels (+ uniqueness weights) ----------
-    fe = build_feature_engine(settings)
-    train_feats = fe.transform(train_ohlcv)
-    label_tp, label_sl = settings.barriers.label_barriers
-    train_labels, t1 = make_triple_barrier_labels(
-        train_ohlcv, train_feats["atr"], horizon=settings.barriers.horizon,
-        tp_mult=label_tp, sl_mult=label_sl,
-        return_events=True,
-    )
-    weights = make_sample_weights(t1)  # down-weight overlapping (non-unique) labels
-    # Drop the last `horizon` rows: their forward window is incomplete.
-    valid = train_labels.index[: len(train_labels) - settings.barriers.horizon]
-    train_feats = train_feats.loc[valid]
-    train_labels = train_labels.loc[valid]
-    train_weights = weights.loc[valid]
+    # Pool any data.train_symbols into training (same as the walk-forward), sliced to the
+    # same cutoff timestamp so no future leaks in. The primary symbol is still tested.
+    def _prepare_one(df: pd.DataFrame):
+        fe = build_feature_engine(settings)
+        feats = fe.transform(df)
+        ltp, lsl = settings.barriers.label_barriers
+        labels, t1 = make_triple_barrier_labels(
+            df, feats["atr"], horizon=settings.barriers.horizon,
+            tp_mult=ltp, sl_mult=lsl, return_events=True,
+        )
+        w = make_sample_weights(t1)
+        valid = labels.index[: len(labels) - settings.barriers.horizon]
+        return feats.loc[valid], labels.loc[valid], w.loc[valid]
+
+    train_frames = [train_ohlcv]
+    if not args.synthetic and settings.data.train_symbols:
+        cutoff_ts = ohlcv.index[split] if split < len(ohlcv) else ohlcv.index[-1]
+        extra = asyncio.run(load_extra_symbols(settings, args))
+        for df in extra.values():
+            train_frames.append(df.loc[df.index < cutoff_ts])
+        logger.info("Pooled %d training symbol(s) into the fit", len(train_frames) - 1)
+
+    parts = [_prepare_one(df) for df in train_frames if not df.empty]
+    train_feats = pd.concat([p[0] for p in parts]).reset_index(drop=True)
+    train_labels = pd.concat([p[1] for p in parts]).reset_index(drop=True)
+    train_weights = pd.concat([p[2] for p in parts]).reset_index(drop=True)
 
     # --- Train + save (all hyperparameters come from MLConfig) -------------
     out_path = Path(args.out)

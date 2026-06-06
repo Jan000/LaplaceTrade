@@ -26,6 +26,8 @@ import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+import pandas as pd  # noqa: E402
+
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 from cryptotrader.backtest.engine import EventDrivenBacktester  # noqa: E402
@@ -70,7 +72,36 @@ async def load_ohlcv(settings: Settings, args: argparse.Namespace):
         await feed.close()
 
 
-def train_predictor(settings: Settings, train_ohlcv):
+async def load_extra_symbols(settings: Settings, args: argparse.Namespace) -> dict:
+    """Fetch each ``data.train_symbols`` symbol (same timeframe/window) for training pooling."""
+    out: dict = {}
+    if args.synthetic:
+        return out
+    days = args.days if args.days is not None else settings.data.history_days
+    start = datetime.now(tz=timezone.utc) - timedelta(days=days)
+    for sym in settings.data.train_symbols:
+        if sym == (args.symbol or settings.exchange.symbol):
+            continue
+        feed = MarketDataFeed(
+            exchange_id=args.exchange or settings.exchange.id, symbol=sym,
+            timeframe=args.timeframe or settings.exchange.timeframe,
+            cache_dir=settings.data.cache_dir,
+        )
+        try:
+            df = await feed.fetch_history(start)
+            if not df.empty:
+                out[sym] = df
+        finally:
+            await feed.close()
+    return out
+
+
+def _prepare_one(settings: Settings, train_ohlcv):
+    """Features + triple-barrier labels + uniqueness weights for one symbol slice.
+
+    Returns the warmup/horizon-trimmed (feats, labels, weights), so the last `horizon`
+    rows (with an incomplete forward window) are dropped — no label leaks past the slice.
+    """
     feats = feature_engine(settings).transform(train_ohlcv)
     label_tp, label_sl = settings.barriers.label_barriers
     labels, t1 = make_triple_barrier_labels(
@@ -80,13 +111,29 @@ def train_predictor(settings: Settings, train_ohlcv):
     )
     weights = make_sample_weights(t1)
     valid = labels.index[: len(labels) - settings.barriers.horizon]
+    return feats.loc[valid], labels.loc[valid], weights.loc[valid]
+
+
+def train_predictor(settings: Settings, train_frames: list):
+    """Train on one or more symbol slices, pooled.
+
+    ``train_frames`` is a list of OHLCV DataFrames (the primary first, then any extra
+    training symbols sliced to the same cutoff). Their (features, labels, weights) are
+    concatenated; the index is reset so cross-symbol duplicate timestamps don't trigger
+    a many-to-many join inside the trainer.
+    """
+    parts = [_prepare_one(settings, df) for df in train_frames if not df.empty]
+    feats = pd.concat([p[0] for p in parts]).reset_index(drop=True)
+    labels = pd.concat([p[1] for p in parts]).reset_index(drop=True)
+    weights = pd.concat([p[2] for p in parts]).reset_index(drop=True)
+
     if settings.model.use_meta_labeling:
         from cryptotrader.ml.meta import train_meta_labeled
 
         predictor, _ = train_meta_labeled(
-            feats.loc[valid], labels.loc[valid], settings.model.to_lgbm_params(),
+            feats, labels, settings.model.to_lgbm_params(),
             eval_fraction=settings.model.eval_fraction, embargo=settings.barriers.horizon,
-            sample_weight=weights.loc[valid],
+            sample_weight=weights,
         )
         return predictor
     n_members = max(1, settings.model.ensemble_size)
@@ -95,8 +142,8 @@ def train_predictor(settings: Settings, train_ohlcv):
         params = settings.model.to_lgbm_params()
         params["random_state"] = settings.model.random_state + k
         m = LightGBMPredictor(params, drop_features=settings.model.drop_features)
-        m.train(feats.loc[valid], labels.loc[valid],
-                eval_fraction=settings.model.eval_fraction, sample_weight=weights.loc[valid])
+        m.train(feats, labels, eval_fraction=settings.model.eval_fraction,
+                sample_weight=weights)
         members.append(m)
     if n_members == 1:
         return members[0]
@@ -136,6 +183,11 @@ def main() -> None:
     logging.getLogger("cryptotrader.data.sources").setLevel(logging.INFO)
     settings = Settings.load()
     ohlcv = asyncio.run(load_ohlcv(settings, args))
+    extra = asyncio.run(load_extra_symbols(settings, args))
+    if settings.data.train_symbols:
+        got = {s: len(d) for s, d in extra.items()}
+        print(f"Pooled training symbols: primary {args.symbol or settings.exchange.symbol} "
+              f"+ {got or 'none fetched'}")
 
     # --- Data-source diagnostic: make it unmistakable what is actually active.
     fe_probe = feature_engine(settings)
@@ -181,7 +233,13 @@ def main() -> None:
         train_ohlcv = ohlcv.iloc[:train_end]
         test_ohlcv = ohlcv.iloc[test_start:test_end]
 
-        predictor = train_predictor(settings, train_ohlcv)
+        # Pool extra symbols' history up to the same cutoff timestamp (no look-ahead).
+        cutoff_ts = ohlcv.index[train_end] if train_end < total else ohlcv.index[-1]
+        train_frames = [train_ohlcv]
+        for df in extra.values():
+            train_frames.append(df.loc[df.index < cutoff_ts])
+
+        predictor = train_predictor(settings, train_frames)
         rep = backtest(settings, test_ohlcv, predictor)
 
         r = rep["total_return_pct"]
