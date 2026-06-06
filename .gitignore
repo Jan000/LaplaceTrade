@@ -7,8 +7,14 @@ __pycache__/
 data/*.sqlite
 *.txt.gz
 .pytest_cache/
+pytest-cache-files-*/
 .mypy_cache/
 .ruff_cache/
 *.egg-info/
 build/
 dist/
+
+# Trained-model artifacts (regenerable via scripts/train_model.py; large binaries)
+models/
+models_old/
+data/train.log

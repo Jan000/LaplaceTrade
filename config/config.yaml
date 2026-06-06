@@ -124,7 +124,10 @@ strategy:
   long_threshold: 0.50    # permissive: the EV gate is now the real filter
   short_threshold: 0.50
   allow_short: true
-  # model_path: models/model.pkl          # trained LightGBM model; baseline if unset
+  model_path: models/model.pkl   # trained model loaded by the live/sim engine at start.
+                                  # Safe if absent: the engine falls back to the momentum
+                                  # baseline until you run a training (Dashboard "Train now"
+                                  # or scripts/train_model.py writes exactly this file).
 
 # Triple barriers — shared by the training labels AND the trade exits, so the
 # backtest/live engine harvests exactly what the model was trained to predict.

@@ -164,7 +164,9 @@ function collectConfig(){
     for(const k of Object.keys(obj)){if(["api_key","api_secret"].includes(k))continue;
       const el=$(`cfg__${sec}__${k}`); if(!el)continue; const orig=obj[k];
       let v; if(typeof orig==="boolean")v=el.checked;
-      else if(Array.isArray(orig))v=el.value.split(",").map(x=>x.trim()).filter(x=>x).map(Number);
+      else if(Array.isArray(orig)){const parts=el.value.split(",").map(x=>x.trim()).filter(x=>x);
+        const allNum=orig.every(x=>typeof x==="number");
+        v=allNum?parts.map(Number):parts;}  /* keep string lists (train_symbols, drop_features) as strings */
       else if(typeof orig==="number")v=el.value===""?orig:Number(el.value);
       else if(orig===null)v=el.value===""?null:el.value;
       else v=el.value;
