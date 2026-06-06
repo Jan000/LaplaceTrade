@@ -87,14 +87,25 @@ class ATRRiskManager(RiskManager):
         if quantity <= 0.0:
             return None
 
+        # Maker entry: post a passive limit just inside the market (below for a buy,
+        # above for a sell) so the entry pays the maker fee with no slippage. The
+        # backtester fills it only if the next bar trades through the level.
+        order_type = OrderType.MARKET
+        limit_price = 0.0
+        if self.execution is not None and self.execution.entry_order_type == "limit":
+            order_type = OrderType.LIMIT
+            offset = self.execution.limit_offset_bps / 10_000.0
+            limit_price = price * (1.0 - int(signal.side) * offset)
+
         return OrderEvent(
             symbol=signal.symbol,
             timestamp=signal.timestamp,
             side=signal.side,
             quantity=quantity,
-            order_type=OrderType.MARKET,
+            order_type=order_type,
             stop_distance=stop_distance,
             tp_distance=tp_distance,
             max_hold_bars=self.barriers.horizon,
             is_exit=False,
+            limit_price=limit_price,
         )

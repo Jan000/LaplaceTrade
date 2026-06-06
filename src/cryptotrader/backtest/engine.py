@@ -152,15 +152,31 @@ class EventDrivenBacktester:
         return self._generate_order(bar, atr_now)
 
     def _execute_pending(self, order: OrderEvent, bar: Bar) -> None:
-        """Fill a queued order at ``bar.open`` and update the portfolio."""
-        fill = self._exec.execute(order, bar)
+        """Fill a queued order and update the portfolio.
+
+        Market orders fill at ``bar.open``. A LIMIT (maker) entry fills only if this
+        bar trades through its posted price — buys need ``bar.low <= limit``, sells
+        ``bar.high >= limit`` — otherwise it is cancelled (no position), modelling the
+        real risk that a passive order is never hit.
+        """
         if order.is_exit:
+            fill = self._exec.execute(order, bar)
             if self._portfolio.has_position:
                 self._portfolio.close_position(fill, exit_reason="signal")
+            return
+
+        if order.order_type is OrderType.LIMIT:
+            lp = order.limit_price
+            long = order.side is Side.LONG
+            touched = (long and bar.low <= lp) or (not long and bar.high >= lp)
+            if not touched:
+                return  # passive order not filled this bar -> cancel
+            fill = self._exec.execute(order, bar, fill_price=lp)
         else:
-            self._portfolio.open_position(
-                fill, order.stop_distance, order.tp_distance, order.max_hold_bars
-            )
+            fill = self._exec.execute(order, bar)
+        self._portfolio.open_position(
+            fill, order.stop_distance, order.tp_distance, order.max_hold_bars
+        )
 
     def _exit_at(self, bar: Bar, pos, price: float, reason: str) -> None:
         """Submit and book an exit fill at ``price`` for the open position."""

@@ -142,6 +142,13 @@ class RiskConfig(BaseModel):
 class ExecutionConfig(BaseModel):
     taker_fee: float = 0.0004
     slippage_bps: float = 1.0
+    # Maker/limit entries: post a passive limit just inside the market instead of
+    # paying the taker fee + slippage. On 4h the intrabar range almost always sweeps
+    # a few-bps offset, so fill rate stays high while entry cost drops to the maker fee
+    # with zero slippage. Exits stay taker (market) — conservative.
+    entry_order_type: str = "market"   # "market" | "limit"
+    maker_fee: float = 0.0002          # Binance maker (2 bps); used for LIMIT entries
+    limit_offset_bps: float = 2.0      # how far inside the market to post the entry limit
 
 
 class StrategyConfig(BaseModel):

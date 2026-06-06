@@ -86,6 +86,7 @@ class OrderEvent(Event):
     tp_distance: float = 0.0    # fixed take-profit distance from fill (tp_mult * ATR)
     max_hold_bars: int = 0      # vertical barrier: exit after N bars (0 = disabled)
     is_exit: bool = False
+    limit_price: float = 0.0    # for LIMIT (maker) entries: the posted price to fill at
 
 
 @dataclass(slots=True)
