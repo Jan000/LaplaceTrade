@@ -85,13 +85,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return JSONResponse({"status": "stopped"})
 
     @app.get("/api/trades")
-    async def trades(limit: int = 200) -> JSONResponse:
-        rows = await _read_store(app.state.settings, lambda s, rid: s.get_trades(rid, limit))
+    async def trades(limit: int = 200, run_id: int | None = None) -> JSONResponse:
+        rows = await _read_store(
+            app.state.settings, lambda s, rid: s.get_trades(rid, limit), run_id
+        )
         return JSONResponse(rows)
 
     @app.get("/api/equity")
-    async def equity(limit: int = 5000) -> JSONResponse:
-        rows = await _read_store(app.state.settings, lambda s, rid: s.get_equity_curve(rid, limit))
+    async def equity(limit: int = 5000, run_id: int | None = None) -> JSONResponse:
+        rows = await _read_store(
+            app.state.settings, lambda s, rid: s.get_equity_curve(rid, limit), run_id
+        )
         return JSONResponse(rows)
 
     @app.websocket("/ws")
@@ -111,13 +115,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     return app
 
 
-async def _read_store(settings: Settings, fn) -> list:
+async def _read_store(settings: Settings, fn, run_id: int | None = None) -> list:
     store = await TradeStore(settings.persistence.db_path).connect()
     try:
-        run_id = await store.latest_run_id()
-        if run_id is None:
+        rid = run_id if run_id is not None else await store.latest_run_id()
+        if rid is None:
             return []
-        return await fn(store, run_id)
+        return await fn(store, rid)
     finally:
         await store.close()
 

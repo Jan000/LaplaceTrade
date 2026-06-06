@@ -25,6 +25,11 @@ from pydantic_settings import (
 # Set by Settings.load() so the YAML source is only active for an explicit
 # load() (keeps a bare Settings() on pure defaults+env, which the tests rely on).
 _YAML_PATH: str | None = None
+# Optional secrets file (API keys), kept OUT of config.yaml and git-ignored. Managed
+# via the dashboard's /api/keys. Loaded with higher priority than config.yaml but below
+# environment variables, so CT_EXCHANGE__API_KEY still wins in CI.
+_SECRETS_PATH: str | None = None
+SECRETS_FILE = "config/secrets.yaml"
 
 
 class RunMode(str, enum.Enum):
@@ -221,6 +226,8 @@ class Settings(BaseSettings):
     def settings_customise_sources(cls, settings_cls, init_settings,
                                    env_settings, dotenv_settings, file_secret_settings):
         sources = [init_settings, env_settings]
+        if _SECRETS_PATH is not None:
+            sources.append(YamlConfigSettingsSource(settings_cls, yaml_file=_SECRETS_PATH))
         if _YAML_PATH is not None:
             sources.append(YamlConfigSettingsSource(settings_cls, yaml_file=_YAML_PATH))
         sources.append(file_secret_settings)
@@ -229,10 +236,13 @@ class Settings(BaseSettings):
     @classmethod
     def load(cls, path: str | Path = "config/config.yaml") -> "Settings":
         """Load with precedence: environment overrides YAML overrides defaults."""
-        global _YAML_PATH
+        global _YAML_PATH, _SECRETS_PATH
         cfg_path = Path(path)
         _YAML_PATH = str(cfg_path) if cfg_path.exists() else None
+        secrets_path = Path(SECRETS_FILE)
+        _SECRETS_PATH = str(secrets_path) if secrets_path.exists() else None
         try:
             return cls()
         finally:
             _YAML_PATH = None
+            _SECRETS_PATH = None

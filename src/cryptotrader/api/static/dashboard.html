@@ -36,8 +36,9 @@
   .field{display:flex;align-items:center;justify-content:space-between;gap:10px;margin:5px 0;}
   .field label{color:var(--muted);font-size:12.5px;} .field input[type=text],.field input[type=number]{width:130px;text-align:right;}
   .field input[type=checkbox]{width:auto;}
-  #train-log{white-space:pre-wrap;font-family:ui-monospace,monospace;font-size:11.5px;color:var(--muted);
+  #train-log,#val-log{white-space:pre-wrap;font-family:ui-monospace,monospace;font-size:11.5px;color:var(--muted);
              background:#0d1018;border:1px solid var(--line);border-radius:8px;padding:10px;max-height:260px;overflow:auto;}
+  code{background:#0d1018;padding:1px 5px;border-radius:4px;}
   .row{display:flex;gap:10px;align-items:center;margin-bottom:10px;}
   .hidden{display:none;}
 </style>
@@ -70,7 +71,12 @@
   <div class="card"><div class="label">Win Rate</div><div class="value" id="winrate">—</div></div>
   <div class="card"><div class="label">Avg Efficiency</div><div class="value" id="eff">—</div></div>
   <div class="card"><div class="label">Open Position</div><div class="value" id="pos" style="font-size:16px">Flat</div></div>
-  <div class="card wide"><h2>Equity Curve</h2><canvas id="chart" height="90"></canvas></div>
+  <div class="card wide">
+    <div class="row"><h2 style="margin:0">Equity Curve</h2><div class="spacer"></div>
+      <span class="sym">View</span>
+      <select id="run-select"><option value="">Live / current</option></select>
+    </div>
+    <canvas id="chart" height="90"></canvas></div>
   <div class="card wide"><h2>Recent Trades</h2><div class="tbl-wrap"><table>
     <thead><tr><th>Side</th><th>Entry</th><th>Exit</th><th>Net PnL</th><th>Efficiency</th><th>Reason</th><th>Exit</th></tr></thead>
     <tbody id="trades"><tr><td colspan="7" class="flat">No trades yet.</td></tr></tbody></table></div></div>
@@ -87,6 +93,23 @@
     </div>
     <div id="cfg-form" class="cfg-grid"></div>
   </div>
+
+  <div class="card wide">
+    <div class="row">
+      <h2 style="margin:0">Exchange API Keys</h2><div class="spacer"></div>
+      <span id="keys-msg" class="sym"></span>
+    </div>
+    <div id="keys-status" class="sym" style="margin-bottom:10px">…</div>
+    <div class="row">
+      <input type="password" id="api-key" placeholder="API key" style="flex:1" autocomplete="off">
+      <input type="password" id="api-secret" placeholder="API secret" style="flex:1" autocomplete="off">
+      <button id="keys-save" class="primary">Save keys</button>
+      <button id="keys-clear" class="danger">Clear</button>
+    </div>
+    <div class="sym" style="margin-top:8px;font-size:11.5px">Stored locally in git-ignored <code>config/secrets.yaml</code>,
+      never shown again and never written to config.yaml. Required only for <b>real-orders</b> live trading.</div>
+  </div>
+
   <div class="card wide">
     <div class="row">
       <h2 style="margin:0">Training</h2><div class="spacer"></div>
@@ -95,6 +118,17 @@
     </div>
     <div id="model-status" class="sym" style="margin-bottom:10px">Model: …</div>
     <div id="train-log">Train output will appear here…</div>
+  </div>
+
+  <div class="card wide">
+    <div class="row">
+      <h2 style="margin:0">Validation (out-of-sample)</h2><div class="spacer"></div>
+      <span class="sym">days</span><input type="number" id="val-days" placeholder="config" style="width:90px">
+      <span id="wf-state" class="sym">idle</span>
+      <button id="wf-btn" class="primary">Run walk-forward</button>
+      <button id="ho-btn" class="primary">Run holdout</button>
+    </div>
+    <div id="val-log">Walk-forward / holdout output will appear here…</div>
   </div>
 </main>
 
@@ -123,7 +157,13 @@ function renderTrades(rows){const tb=$("trades");
     <td><span class="pill ${t.side}">${t.side}</span></td><td>$${fmt(t.entry_price)}</td><td>$${fmt(t.exit_price)}</td>
     <td class="${sign(t.net_pnl)}">$${fmt(t.net_pnl,2)}</td><td>${fmt(t.efficiency_ratio*100,1)}%</td>
     <td class="reason">${t.exit_reason}</td><td class="reason">${(t.exit_time||"").slice(11,19)}</td></tr>`).join("");}
+let viewingRun=null;        // null = live; otherwise a past run id is shown (frozen)
+let prevStatus=null;
 function render(s){
+  // When the user is browsing a past run, don't let live ticks overwrite the view.
+  if(s.status!=="running"&&prevStatus==="running") loadRuns();  // a run just ended -> refresh picker
+  prevStatus=s.status;
+  if(viewingRun!==null) return;
   $("sym").textContent=s.symbol||"—";
   $("mode-label").textContent=s.status==="running"?`${s.mode} · running`:s.status;
   $("status-dot").className="dot "+(s.status||"idle");
@@ -237,5 +277,94 @@ function pollTrain(loop){fetch("/api/train/status").then(r=>r.json()).then(s=>{
   if(loop){clearInterval(trainTimer); trainTimer=setInterval(()=>pollTrain(false),2000);}
   if(!s.running){clearInterval(trainTimer); trainTimer=null; loadModel();}  /* stop polling + refresh model when done */
 }).catch(()=>{clearInterval(trainTimer);trainTimer=null;});}
+
+/* ---------- run history browser ---------- */
+const RUNS={};  // id -> run meta
+async function loadRuns(){
+  try{const runs=await fetch("/api/runs?limit=100").then(r=>r.json());
+    const sel=$("run-select"); const keep=sel.value;
+    sel.innerHTML=`<option value="">Live / current</option>`+runs.map(r=>{
+      RUNS[r.id]=r; const ret=r.initial_equity?((r.final_equity??r.initial_equity)/r.initial_equity-1)*100:0;
+      const when=(r.started_at||"").slice(0,16).replace("T"," ");
+      return `<option value="${r.id}">#${r.id} · ${r.symbol} · ${r.mode} · ${when} · ${ret>=0?"+":""}${ret.toFixed(1)}% (${r.n_trades} tr)</option>`;
+    }).join("");
+    sel.value=keep;
+  }catch(e){}
+}
+function renderHistorical(run,trades){
+  $("sym").textContent=run.symbol||"—";
+  $("mode-label").textContent=`run #${run.id} · ${run.mode}`;
+  $("status-dot").className="dot stopped";
+  const fin=run.final_equity??run.initial_equity, init=run.initial_equity||0;
+  $("equity").textContent="$"+fmt(fin);
+  const ret=init?(fin/init-1)*100:0; const rr=$("ret"); rr.textContent=fmt(ret)+"%"; rr.className="value "+sign(ret);
+  const u=$("upnl"); u.textContent="$0.00"; u.className="value";
+  $("price").textContent="—"; $("ntrades").textContent=run.n_trades??trades.length;
+  const wins=trades.filter(t=>t.net_pnl>0).length;
+  $("winrate").textContent=fmt(trades.length?wins/trades.length*100:0,1)+"%";
+  const effs=trades.map(t=>t.efficiency_ratio).filter(x=>x!=null);
+  $("eff").textContent=fmt(effs.length?effs.reduce((a,b)=>a+b,0)/effs.length*100:0,1)+"%";
+  $("pos").innerHTML="Flat";
+}
+function normTrades(rows){return rows.map(t=>({
+  side:t.side===1?"LONG":(t.side===-1?"SHORT":t.side),
+  entry_price:t.entry_price,exit_price:t.exit_price,net_pnl:t.net_pnl,
+  efficiency_ratio:t.efficiency_ratio,exit_reason:t.exit_reason,exit_time:t.exit_time}));}
+$("run-select").onchange=async()=>{
+  const id=$("run-select").value;
+  if(!id){viewingRun=null; fetch("/api/state").then(r=>r.json()).then(render); return;}
+  viewingRun=Number(id);
+  const [tr,eq]=await Promise.all([
+    fetch(`/api/trades?run_id=${id}&limit=500`).then(r=>r.json()),
+    fetch(`/api/equity?run_id=${id}&limit=5000`).then(r=>r.json())]);
+  const trades=normTrades(tr);
+  renderEquity(eq.map(p=>({t:p.timestamp,equity:p.equity})));
+  renderTrades(trades);
+  renderHistorical(RUNS[id]||{id,initial_equity:0},trades);
+};
+
+/* ---------- API keys ---------- */
+async function loadKeys(){
+  try{const k=await fetch("/api/keys").then(r=>r.json());
+    $("keys-status").innerHTML=(k.has_key&&k.has_secret)
+      ? `Keys for <b>${k.exchange_id}</b>: <b style="color:var(--green)">set</b> — real-orders trading enabled.`
+      : `Keys for <b>${k.exchange_id}</b>: <b style="color:var(--amber)">not set</b> — paper trading only.`;
+  }catch(e){$("keys-status").textContent="Keys: (status unavailable)";}
+}
+$("keys-save").onclick=async()=>{$("keys-msg").textContent="saving…";
+  const r=await fetch("/api/keys",{method:"POST",headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({api_key:$("api-key").value,api_secret:$("api-secret").value})});
+  const b=await r.json(); $("keys-msg").textContent=r.ok?"saved ✓":("error: "+(b.error||""));
+  $("api-key").value=""; $("api-secret").value=""; loadKeys();};
+$("keys-clear").onclick=async()=>{if(!confirm("Remove the stored API keys?"))return;
+  await fetch("/api/keys",{method:"DELETE"}); $("keys-msg").textContent="cleared"; loadKeys();};
+
+/* ---------- validation jobs (walk-forward / holdout) ---------- */
+let valTimer=null;
+function startJob(kind){
+  const days=$("val-days").value;
+  const args=days?["--days",days]:[];
+  $("wf-btn").disabled=true; $("ho-btn").disabled=true; $("wf-state").textContent="starting…";
+  fetch("/api/job",{method:"POST",headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({kind,args})}).then(r=>r.json()).then(j=>{
+      if(j.status==="busy"){$("wf-state").textContent="busy — another job is running";}
+      pollJob(kind,true);
+    });
+}
+$("wf-btn").onclick=()=>startJob("walkforward");
+$("ho-btn").onclick=()=>startJob("holdout");
+function pollJob(kind,loop){fetch(`/api/job/status?kind=${kind}`).then(r=>r.json()).then(s=>{
+  $("wf-state").textContent=`${kind}: ${s.status}`;
+  $("val-log").textContent=s.log||"(no output yet)"; $("val-log").scrollTop=$("val-log").scrollHeight;
+  const anyRunning=!!s.running_kind;                 // one job at a time -> disable both while busy
+  $("wf-btn").disabled=anyRunning; $("ho-btn").disabled=anyRunning;
+  if(loop){clearInterval(valTimer); valTimer=setInterval(()=>pollJob(kind,false),2000);}
+  if(!s.running){clearInterval(valTimer); valTimer=null;}
+}).catch(()=>{clearInterval(valTimer);valTimer=null;});}
+
+/* settings tab also loads keys; monitor init loads the run list */
+const _origSettings=$("tab-settings").onclick;
+$("tab-settings").onclick=(e)=>{_origSettings(e); loadKeys();};
+loadRuns();
 </script>
 </body></html>

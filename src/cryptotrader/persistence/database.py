@@ -239,6 +239,19 @@ class TradeStore:
             row = await cur.fetchone()
         return int(row["m"]) if row and row["m"] is not None else None
 
+    async def list_runs(self, limit: int = 100) -> list[dict[str, Any]]:
+        """Run metadata (newest first) with trade count + last equity, for the run picker."""
+        async with self._conn.execute(
+            "SELECT r.id, r.started_at, r.mode, r.symbol, r.exchange, r.initial_equity, "
+            "(SELECT COUNT(*) FROM trades t WHERE t.run_id = r.id) AS n_trades, "
+            "(SELECT e.equity FROM equity_snapshots e WHERE e.run_id = r.id "
+            " ORDER BY e.id DESC LIMIT 1) AS final_equity "
+            "FROM runs r ORDER BY r.id DESC LIMIT ?",
+            (limit,),
+        ) as cur:
+            rows = await cur.fetchall()
+        return [dict(r) for r in rows]
+
     async def get_trades(self, run_id: int, limit: int = 500) -> list[dict[str, Any]]:
         """Return the most recent ``limit`` trades for a run (newest first)."""
         async with self._conn.execute(

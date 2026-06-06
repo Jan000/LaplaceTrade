@@ -18,3 +18,7 @@ dist/
 models/
 models_old/
 data/train.log
+data/job_*.log
+
+# API keys entered via the dashboard — NEVER commit secrets
+config/secrets.yaml
