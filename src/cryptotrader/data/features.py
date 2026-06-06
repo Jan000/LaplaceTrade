@@ -116,6 +116,7 @@ class MicrostructureFeatureEngine(FeatureCalculator):
         amihud: int = 20,
         fracdiff_d: float = 0.4,
         fracdiff_window: int = 60,
+        trend_ema: int = 50,
         use_taker_flow: bool = False,
         use_funding: bool = False,
         use_open_interest: bool = False,
@@ -145,6 +146,7 @@ class MicrostructureFeatureEngine(FeatureCalculator):
         self.amihud = amihud
         self.fracdiff_d = fracdiff_d
         self.fracdiff_window = fracdiff_window
+        self.trend_ema = trend_ema
         self.use_taker_flow = use_taker_flow
         self.use_funding = use_funding
         self.use_open_interest = use_open_interest
@@ -156,7 +158,7 @@ class MicrostructureFeatureEngine(FeatureCalculator):
             atr_period, vwap_window, volume_spike_window, zscore_window,
             max(self.momentum_windows), extra_momentum, macd_slow, rsi_slow,
             bollinger_window, adx_period, donchian, parkinson, obv_z, amihud,
-            fracdiff_window, cross_corr_window,
+            fracdiff_window, cross_corr_window, trend_ema,
         ) + 2
 
         self._names = self._build_feature_names()
@@ -325,10 +327,17 @@ class MicrostructureFeatureEngine(FeatureCalculator):
             if _ext in feats:
                 feats[_ext] = feats[_ext].fillna(0.0)
 
+        # trend_sig: +1 above the slow EMA (uptrend), -1 below. A trailing HELPER
+        # column for the regime filter (like atr) — NOT a model feature, so the
+        # validated feature set is unchanged.
+        ema_trend = c.ewm(span=self.trend_ema, adjust=False).mean()
+        feats["trend_sig"] = np.sign(c - ema_trend)
+
         frame = pd.DataFrame(feats, index=ohlcv.index)
         # atr is kept as a trailing helper column (labels + ATR sizing); it is
-        # NOT a model feature (raw atr is price-scaled / non-stationary).
-        return frame[self._names + ["atr"]]
+        # NOT a model feature (raw atr is price-scaled / non-stationary). trend_sig
+        # is likewise a helper consumed only by the strategy's regime filter.
+        return frame[self._names + ["atr", "trend_sig"]]
 
     def update(self, bar: Bar) -> pd.Series | None:
         self._buffer.append(bar)

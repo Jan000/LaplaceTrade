@@ -182,9 +182,10 @@ def main() -> None:
     # --- Features + triple-barrier labels (+ uniqueness weights) ----------
     fe = build_feature_engine(settings)
     train_feats = fe.transform(train_ohlcv)
+    label_tp, label_sl = settings.barriers.label_barriers
     train_labels, t1 = make_triple_barrier_labels(
         train_ohlcv, train_feats["atr"], horizon=settings.barriers.horizon,
-        tp_mult=settings.barriers.tp_mult, sl_mult=settings.barriers.sl_mult,
+        tp_mult=label_tp, sl_mult=label_sl,
         return_events=True,
     )
     weights = make_sample_weights(t1)  # down-weight overlapping (non-unique) labels
@@ -211,13 +212,26 @@ def main() -> None:
             out_path, info["meta_train_accuracy"], info["primary_win_base_rate"],
         )
     else:
-        predictor = LightGBMPredictor(settings.model.to_lgbm_params())
-        metrics = predictor.train(
-            train_feats, train_labels, eval_fraction=settings.model.eval_fraction,
-            sample_weight=train_weights,
-        )
+        n_members = max(1, settings.model.ensemble_size)
+        members, metrics = [], {"val_accuracy": 0.0}
+        for k in range(n_members):
+            params = settings.model.to_lgbm_params()
+            params["random_state"] = settings.model.random_state + k
+            m = LightGBMPredictor(params, drop_features=settings.model.drop_features)
+            metrics = m.train(
+                train_feats, train_labels, eval_fraction=settings.model.eval_fraction,
+                sample_weight=train_weights,
+            )
+            members.append(m)
+        if n_members == 1:
+            predictor = members[0]
+        else:
+            from cryptotrader.ml.model import EnsemblePredictor
+
+            predictor = EnsemblePredictor(members)
         predictor.save(out_path)
-        logger.info("Saved model to %s (val_accuracy=%.3f)", out_path, metrics["val_accuracy"])
+        logger.info("Saved %d-member model to %s (last val_accuracy=%.3f)",
+                    n_members, out_path, metrics["val_accuracy"])
 
     # --- Persist the held-out slice for the dashboard ----------------------
     replay_path = out_path.parent / "holdout.parquet"

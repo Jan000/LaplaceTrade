@@ -21,7 +21,17 @@ logger = logging.getLogger(__name__)
 
 
 def _to_utc(idx: pd.DatetimeIndex) -> pd.DatetimeIndex:
-    return idx.tz_localize("UTC") if idx.tz is None else idx.tz_convert("UTC")
+    idx = idx.tz_localize("UTC") if idx.tz is None else idx.tz_convert("UTC")
+    # Normalise to nanosecond resolution. pandas 3.0's reindex/align hashtable can
+    # silently fail to match otherwise-identical datetime64[ms]/[us] tz-aware
+    # indexes — Index.intersection matches but Series.reindex returns all-NaN
+    # (the cause of the "fetched but 0 aligned" taker-flow bug). Forcing a common
+    # ns unit on both sides routes the lookup through the working code path.
+    try:
+        idx = idx.as_unit("ns")
+    except (AttributeError, ValueError):  # pragma: no cover - older pandas
+        pass
+    return idx
 
 
 def _exact_or_nearest(series: pd.Series, index: pd.DatetimeIndex) -> pd.Series:
@@ -70,9 +80,16 @@ async def fetch_taker_flow(client, market_id: str, timeframe: str,
         return pd.DataFrame()
     df = pd.DataFrame(rows)
     # kline = [openTime,o,h,l,c,vol,closeTime,quoteVol,numTrades,takerBuyBase,takerBuyQuote,ignore]
+    # NB: take .to_numpy() before building the frame. df[9] etc. carry a RangeIndex;
+    # passing them as Series alongside an explicit datetime ``index=`` makes pandas
+    # re-align them onto that index (no overlap) and silently fill every value with
+    # NaN — the real cause of the "fetched but 0 aligned" taker-flow bug.
     out = pd.DataFrame(
-        {"taker_buy_base": df[9].astype(float), "num_trades": df[8].astype(float)},
-        index=pd.to_datetime(df[0].astype("int64"), unit="ms", utc=True),
+        {
+            "taker_buy_base": df[9].astype(float).to_numpy(),
+            "num_trades": df[8].astype(float).to_numpy(),
+        },
+        index=pd.to_datetime(df[0].astype("int64").to_numpy(), unit="ms", utc=True),
     )
     return out[~out.index.duplicated(keep="last")].sort_index()
 

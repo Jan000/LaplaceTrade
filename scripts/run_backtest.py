@@ -53,9 +53,10 @@ def main() -> None:
 
     if args.lgbm:
         features = feature_engine.transform(ohlcv)
+        label_tp, label_sl = settings.barriers.label_barriers
         labels, t1 = make_triple_barrier_labels(
             ohlcv, features["atr"], horizon=settings.barriers.horizon,
-            tp_mult=settings.barriers.tp_mult, sl_mult=settings.barriers.sl_mult,
+            tp_mult=label_tp, sl_mult=label_sl,
             return_events=True,
         )
         weights = make_sample_weights(t1)

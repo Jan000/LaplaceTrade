@@ -158,7 +158,9 @@ def train_meta_labeled(
     # Meta label: 1 if the directional bet hit its take-profit barrier.
     meta_y = (np.sign(yb.to_numpy()[fired]) == pdir[fired]).astype(int)
 
-    feat_cols = [c for c in features.columns if c != "atr"]
+    from cryptotrader.ml.model import _NON_FEATURE_COLS
+
+    feat_cols = [c for c in features.columns if c not in _NON_FEATURE_COLS]
     cols = feat_cols + _META_EXTRA
     meta = lgb.LGBMClassifier(**(meta_params or _DEFAULT_META_PARAMS))
     meta.fit(meta_X[cols], meta_y)
@@ -186,4 +188,8 @@ def load_predictor(path: str | Path):
     blob = joblib.load(path)
     if "meta" in blob:
         return MetaLabeledPredictor.load(path)
+    if "ensemble" in blob:
+        from cryptotrader.ml.model import EnsemblePredictor
+
+        return EnsemblePredictor.load(path)
     return LightGBMPredictor().load(path)

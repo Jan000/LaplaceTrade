@@ -41,6 +41,7 @@ class MLStrategy(Strategy):
         self._feature_engine = feature_engine
         # Populated by prepare() in backtest mode; empty in live mode.
         self._predictions: dict[pd.Timestamp, Prediction] = {}
+        self._trend: dict[pd.Timestamp, float] = {}
         self._replay = False
 
     # ------------------------------------------------------------------ #
@@ -54,27 +55,41 @@ class MLStrategy(Strategy):
             return
         preds = self._predictor.predict_batch(valid)
         self._predictions = dict(zip(valid.index, preds))
+        if "trend_sig" in valid.columns:
+            self._trend = dict(zip(valid.index, valid["trend_sig"]))
         self._replay = True
 
     # ------------------------------------------------------------------ #
     # Per-bar decision
     # ------------------------------------------------------------------ #
     def on_market(self, event: MarketEvent) -> SignalEvent | None:
-        prediction = self._lookup_prediction(event)
+        prediction, trend = self._lookup(event)
         if prediction is None:
             return None
-        return self._to_signal(event, prediction)
+        return self._to_signal(event, prediction, trend)
 
-    def _lookup_prediction(self, event: MarketEvent) -> Prediction | None:
+    def _lookup(self, event: MarketEvent) -> tuple[Prediction | None, float]:
         if self._replay:
-            return self._predictions.get(pd.Timestamp(event.bar.timestamp))
+            ts = pd.Timestamp(event.bar.timestamp)
+            return self._predictions.get(ts), float(self._trend.get(ts, 0.0))
         if self._feature_engine is None:
             raise RuntimeError("Live mode requires a feature_engine.")
         row = self._feature_engine.update(event.bar)
-        return self._predictor.predict(row) if row is not None else None
+        if row is None:
+            return None, 0.0
+        trend = float(row.get("trend_sig", 0.0)) if hasattr(row, "get") else 0.0
+        return self._predictor.predict(row), trend
 
-    def _to_signal(self, event: MarketEvent, pred: Prediction) -> SignalEvent | None:
+    def _to_signal(
+        self, event: MarketEvent, pred: Prediction, trend: float
+    ) -> SignalEvent | None:
         bar = event.bar
+        # Regime filter: drop signals that fight the slow-EMA trend.
+        if self._config.trend_filter and trend != 0.0:
+            if pred.direction is Side.LONG and trend < 0.0:
+                return None
+            if pred.direction is Side.SHORT and trend > 0.0:
+                return None
         if pred.direction is Side.LONG and pred.confidence >= self._config.long_threshold:
             return SignalEvent(self._symbol, bar.timestamp, Side.LONG, pred.confidence)
         if (

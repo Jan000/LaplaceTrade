@@ -72,9 +72,10 @@ async def load_ohlcv(settings: Settings, args: argparse.Namespace):
 
 def train_predictor(settings: Settings, train_ohlcv):
     feats = feature_engine(settings).transform(train_ohlcv)
+    label_tp, label_sl = settings.barriers.label_barriers
     labels, t1 = make_triple_barrier_labels(
         train_ohlcv, feats["atr"], horizon=settings.barriers.horizon,
-        tp_mult=settings.barriers.tp_mult, sl_mult=settings.barriers.sl_mult,
+        tp_mult=label_tp, sl_mult=label_sl,
         return_events=True,
     )
     weights = make_sample_weights(t1)
@@ -88,10 +89,20 @@ def train_predictor(settings: Settings, train_ohlcv):
             sample_weight=weights.loc[valid],
         )
         return predictor
-    predictor = LightGBMPredictor(settings.model.to_lgbm_params())
-    predictor.train(feats.loc[valid], labels.loc[valid],
-                    eval_fraction=settings.model.eval_fraction, sample_weight=weights.loc[valid])
-    return predictor
+    n_members = max(1, settings.model.ensemble_size)
+    members = []
+    for k in range(n_members):
+        params = settings.model.to_lgbm_params()
+        params["random_state"] = settings.model.random_state + k
+        m = LightGBMPredictor(params, drop_features=settings.model.drop_features)
+        m.train(feats.loc[valid], labels.loc[valid],
+                eval_fraction=settings.model.eval_fraction, sample_weight=weights.loc[valid])
+        members.append(m)
+    if n_members == 1:
+        return members[0]
+    from cryptotrader.ml.model import EnsemblePredictor
+
+    return EnsemblePredictor(members)
 
 
 def backtest(settings: Settings, test_ohlcv, predictor) -> dict:

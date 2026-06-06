@@ -16,9 +16,10 @@ logger = logging.getLogger(__name__)
 _CLASS_TO_SIDE = {0: Side.SHORT, 1: Side.FLAT, 2: Side.LONG}
 _SIDE_TO_CLASS = {Side.SHORT: 0, Side.FLAT: 1, Side.LONG: 2}
 
-# "atr" is produced by the feature engine as a helper column (for labels + ATR
-# sizing) but is NOT a model feature (raw atr is price-scaled / non-stationary).
-_NON_FEATURE_COLS = {"atr"}
+# Helper columns produced by the feature engine that are NOT model features:
+#  * "atr"       — used for labels + ATR position sizing (raw atr is non-stationary).
+#  * "trend_sig" — used only by the strategy's regime filter.
+_NON_FEATURE_COLS = {"atr", "trend_sig"}
 
 
 def make_triple_barrier_labels(
@@ -128,10 +129,60 @@ class MomentumBaselinePredictor:
         return self.predict_batch(features.to_frame().T)[0]
 
 
+class EnsemblePredictor:
+    """Averages the class probabilities of several LightGBM members.
+
+    Each member is the same model trained with a different random seed (and bagging),
+    so they make different errors. Averaging their probabilities cancels seed/sampling
+    variance — the dominant noise source when the training set is only a few thousand
+    rows — without changing the systematic signal. Implements the Predictor protocol.
+    """
+
+    def __init__(self, members: list["LightGBMPredictor"]) -> None:
+        if not members:
+            raise ValueError("EnsemblePredictor needs at least one member.")
+        self._members = members
+
+    def predict_batch(self, features: pd.DataFrame) -> list[Prediction]:
+        proba = None
+        for m in self._members:
+            p = m.predict_proba_matrix(features)
+            proba = p if proba is None else proba + p
+        proba = proba / len(self._members)
+        out: list[Prediction] = []
+        for row in proba:
+            cls = int(np.argmax(row))
+            out.append(Prediction(_CLASS_TO_SIDE[cls], float(row[cls]), tuple(row)))
+        return out
+
+    def predict(self, features: pd.Series) -> Prediction:
+        return self.predict_batch(features.to_frame().T)[0]
+
+    def save(self, path: str | Path) -> None:
+        import joblib
+
+        joblib.dump(
+            {"ensemble": [(m._model, m._feature_names) for m in self._members]}, path
+        )
+
+    @classmethod
+    def load(cls, path: str | Path) -> "EnsemblePredictor":
+        import joblib
+
+        blob = joblib.load(path)
+        members = []
+        for model, names in blob["ensemble"]:
+            m = LightGBMPredictor()
+            m._model, m._feature_names = model, names
+            members.append(m)
+        return cls(members)
+
+
 class LightGBMPredictor:
     """LightGBM 3-class predictor implementing the Predictor protocol."""
 
-    def __init__(self, params: dict | None = None) -> None:
+    def __init__(self, params: dict | None = None, drop_features: list[str] | None = None) -> None:
+        self._drop = set(drop_features or [])
         self._params = params or {
             "objective": "multiclass",
             "num_class": 3,
@@ -162,7 +213,7 @@ class LightGBMPredictor:
         except ImportError as exc:  # pragma: no cover
             raise RuntimeError("lightgbm is required to train LightGBMPredictor.") from exc
 
-        cols = [c for c in features.columns if c not in _NON_FEATURE_COLS]
+        cols = [c for c in features.columns if c not in _NON_FEATURE_COLS and c not in self._drop]
         data = features[cols].join(labels).dropna()
         X = data[cols]
         y = data[labels.name].map(lambda v: _SIDE_TO_CLASS[Side(int(np.sign(v)))])
@@ -202,11 +253,17 @@ class LightGBMPredictor:
         self._feature_names = blob["features"]
         return self
 
-    def predict_batch(self, features: pd.DataFrame) -> list[Prediction]:
+    def predict_proba_matrix(self, features: pd.DataFrame) -> np.ndarray:
+        """Raw (n, 3) class-probability matrix on the model's own feature columns."""
         if self._model is None:
             raise RuntimeError("Model is not trained/loaded.")
-        cols = self._feature_names or [c for c in features.columns if c not in _NON_FEATURE_COLS]
-        proba = self._model.predict_proba(features[cols])
+        cols = self._feature_names or [
+            c for c in features.columns if c not in _NON_FEATURE_COLS and c not in self._drop
+        ]
+        return self._model.predict_proba(features[cols])
+
+    def predict_batch(self, features: pd.DataFrame) -> list[Prediction]:
+        proba = self.predict_proba_matrix(features)
         out: list[Prediction] = []
         for row in proba:
             cls = int(np.argmax(row))

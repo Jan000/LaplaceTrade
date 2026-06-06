@@ -71,6 +71,7 @@ class FeatureConfig(BaseModel):
     amihud: int = 20
     fracdiff_d: float = 0.4
     fracdiff_window: int = 60
+    trend_ema: int = 50              # slow EMA span (bars) for the regime/trend filter
     # --- Optional extra data sources (all opt-in; features computed only when
     # the source columns are present in the OHLCV frame) ---
     use_taker_flow: bool = False     # taker buy/sell volume + trade count (Binance klines)
@@ -97,6 +98,9 @@ class MLConfig(BaseModel):
     test_fraction: float = 0.25             # held-out slice for evaluation
     random_state: int = 42                  # fix for reproducible runs
     use_meta_labeling: bool = False         # add a secondary "should I act?" model
+    drop_features: list[str] = Field(default_factory=list)  # feature names to exclude (anti-overfit pruning)
+    ensemble_size: int = 1                  # >1 averages N seed-varied models (variance reduction)
+    bagging_freq: int = 0                   # LightGBM bagging frequency; >0 makes `subsample` actually bag
 
     def to_lgbm_params(self) -> dict[str, Any]:
         return {
@@ -108,6 +112,7 @@ class MLConfig(BaseModel):
             "max_depth": self.max_depth,
             "min_child_samples": self.min_child_samples,
             "subsample": self.subsample,
+            "subsample_freq": self.bagging_freq,  # subsample only bags when this is > 0
             "colsample_bytree": self.colsample_bytree,
             "reg_lambda": self.reg_lambda,
             "class_weight": self.class_weight,
@@ -140,14 +145,38 @@ class StrategyConfig(BaseModel):
     short_threshold: float = 0.62
     allow_short: bool = True
     model_path: Path | None = None
+    # Regime filter: when on, only take signals that agree with the slow-EMA trend
+    # (long only above the EMA, short only below). Symmetric, so it stays regime-
+    # adaptive rather than just betting on the prevailing direction.
+    trend_filter: bool = False
 
 
 class BarrierConfig(BaseModel):
-    """Triple-barrier params shared by training labels and trade exits."""
+    """Triple-barrier params.
 
-    tp_mult: float = 1.5
+    Two *separate* barrier sets, because labelling and trading want opposite things:
+
+    * **Trade exits** (``tp_mult`` / ``sl_mult``) — may be asymmetric to give a
+      favourable reward:risk (let winners run, cut losers).
+    * **Labels** (``label_tp_mult`` / ``label_sl_mult``) — should be **symmetric**.
+      An asymmetric tp/sl makes the nearer barrier far easier to touch, which biases
+      the training labels (and therefore the model's direction calls) toward one
+      side — e.g. a tight stop + wide target yields mostly ``-1`` labels and a
+      chronically short-biased model that bleeds in an uptrend. Defaulting them to
+      ``None`` falls back to ``max(tp_mult, sl_mult)`` on both sides (symmetric).
+    """
+
+    tp_mult: float = 2.0
     sl_mult: float = 1.0
-    horizon: int = 15
+    horizon: int = 18
+    label_tp_mult: float | None = None
+    label_sl_mult: float | None = None
+
+    @property
+    def label_barriers(self) -> tuple[float, float]:
+        """(tp, sl) multipliers for *labelling* — symmetric unless overridden."""
+        sym = max(self.tp_mult, self.sl_mult)
+        return (self.label_tp_mult or sym, self.label_sl_mult or sym)
 
 
 class PersistenceConfig(BaseModel):
