@@ -45,6 +45,13 @@ real time over a WebSocket. A **View** selector browses any past run from the
 database (equity, trades and a frozen summary); on a page refresh it seeds from the
 last persisted run so the panel is never blank.
 
+**Trades & Analytics tab** — pick a source (latest run / **all runs** / any specific
+run) and get a full performance breakdown: 18 stat cards (win rate, profit factor,
+expectancy, avg/largest win & loss, payoff, max drawdown, total fees, avg efficiency,
+avg hold, win/loss streaks, by-side and by-exit-reason), a cumulative-PnL chart, and
+the **complete trade log** — filterable (side, win/loss/break-even, exit reason,
+free-text), sortable by any column, with CSV export.
+
 **Settings & Training tab**
 * **All Parameters** — edit and save the entire `config/config.yaml` (every section,
   including `train_symbols` / `drop_features` as comma-separated lists).
