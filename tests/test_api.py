@@ -19,3 +19,7 @@ def test_dashboard_and_state(tmp_path) -> None:
         assert state["status"] in {"idle", "stopped"}
         assert client.get("/api/trades").json() == []
         assert client.get("/api/equity").json() == []
+
+        model = client.get("/api/model").json()
+        assert "active" in model and "exists" in model
+        assert model["active"] in {"trained model", "momentum baseline"}

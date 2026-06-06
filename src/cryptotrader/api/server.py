@@ -43,6 +43,32 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def get_state() -> JSONResponse:
         return JSONResponse(controller.state.snapshot())
 
+    @app.get("/api/model")
+    async def model_info() -> JSONResponse:
+        """Which predictor the engine will load: the trained model or the baseline."""
+        from datetime import datetime, timezone
+
+        s = app.state.settings
+        path = s.strategy.model_path
+        p = Path(path) if path else None
+        exists = bool(p and p.exists())
+        info: dict = {
+            "configured_path": str(path) if path else None,
+            "exists": exists,
+            "active": "trained model" if exists else "momentum baseline",
+            "trained_at": None,
+            "size_bytes": None,
+            "train_symbols": s.data.train_symbols,
+            "timeframe": s.exchange.timeframe,
+        }
+        if exists:
+            stat = p.stat()
+            info["trained_at"] = datetime.fromtimestamp(
+                stat.st_mtime, tz=timezone.utc
+            ).isoformat()
+            info["size_bytes"] = stat.st_size
+        return JSONResponse(info)
+
     @app.post("/api/start")
     async def start(req: StartRequest) -> JSONResponse:
         try:
