@@ -31,9 +31,8 @@ pytest -q
 
 ## Control Center (dashboard)
 
-A FastAPI backend serves a single-page dashboard (HTML/JS + Chart.js) with a
-live/sim toggle, account & PnL cards, an equity chart, and a trade history fed in
-real time over a WebSocket.
+A FastAPI backend serves a single-page dashboard (HTML/JS + Chart.js). The whole
+lifecycle — configure, train, validate, trade, review — is operable from the UI.
 
 ```bash
 uvicorn cryptotrader.api.server:app          # then open http://127.0.0.1:8000
@@ -41,11 +40,30 @@ uvicorn cryptotrader.api.server:app          # then open http://127.0.0.1:8000
 python -m cryptotrader.api.server
 ```
 
-* **Simulation** mode replays synthetic data through the *paper* execution
-  handler — fully offline, no keys, great for demos.
-* **Live** mode streams real ccxt market data through the *paper* handler by
-  default (no real orders). Real order placement uses `CCXTExecutionHandler` and
-  is opt-in (`real_orders=true` + API keys); see `execution/live.py`.
+**Monitor tab** — account & PnL cards, equity chart and trade history streamed in
+real time over a WebSocket. A **View** selector browses any past run from the
+database (equity, trades and a frozen summary); on a page refresh it seeds from the
+last persisted run so the panel is never blank.
+
+**Settings & Training tab**
+* **All Parameters** — edit and save the entire `config/config.yaml` (every section,
+  including `train_symbols` / `drop_features` as comma-separated lists).
+* **Exchange API Keys** — enter API key/secret for real trading. They are stored only
+  in a git-ignored `config/secrets.yaml` (merged into Settings below env vars,
+  `chmod 600` best-effort), are **never** written to `config.yaml` and **never** echoed
+  back — the UI shows only set/unset. `/api/config` redacts them too.
+* **Training** — "Train now" runs `scripts/train_model.py` on the saved config with a
+  live log; the model-status line shows whether the trained model or the baseline is
+  active, when it was trained and which symbols were pooled.
+* **Validation** — run **walk-forward** or **holdout** out-of-sample checks
+  (optional `--days`) directly, with live log output. One background job runs at a time.
+
+**Modes (header)**
+* **Simulation** replays held-out/synthetic data through the *paper* handler — offline,
+  no keys.
+* **Live** streams real ccxt market data; *paper* fills by default. Tick the
+  confirm-gated **real orders** toggle (live mode only) to place REAL orders via
+  `CCXTExecutionHandler` — this requires saved API keys and trades live funds.
 
 ## Live engine
 
