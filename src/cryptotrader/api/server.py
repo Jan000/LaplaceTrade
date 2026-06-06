@@ -85,18 +85,40 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return JSONResponse({"status": "stopped"})
 
     @app.get("/api/trades")
-    async def trades(limit: int = 200, run_id: int | None = None) -> JSONResponse:
-        rows = await _read_store(
-            app.state.settings, lambda s, rid: s.get_trades(rid, limit), run_id
-        )
+    async def trades(limit: int = 200, run_id: str | None = None) -> JSONResponse:
+        if run_id == "all":
+            rows = await _read_store_all(app.state.settings, lambda s: s.get_all_trades(limit))
+            return JSONResponse(rows)
+        rid = int(run_id) if run_id not in (None, "", "latest") else None
+        rows = await _read_store(app.state.settings, lambda s, r: s.get_trades(r, limit), rid)
         return JSONResponse(rows)
 
     @app.get("/api/equity")
-    async def equity(limit: int = 5000, run_id: int | None = None) -> JSONResponse:
+    async def equity(limit: int = 5000, run_id: str | None = None) -> JSONResponse:
+        rid = int(run_id) if run_id not in (None, "", "latest", "all") else None
         rows = await _read_store(
-            app.state.settings, lambda s, rid: s.get_equity_curve(rid, limit), run_id
+            app.state.settings, lambda s, r: s.get_equity_curve(r, limit), rid
         )
         return JSONResponse(rows)
+
+    @app.get("/api/stats")
+    async def stats(run_id: str | None = None) -> JSONResponse:
+        """Rich trade statistics for one run, the latest run, or all runs (run_id=all)."""
+        from cryptotrader.backtest.analytics import summarize_trades
+
+        if run_id == "all":
+            trades_rows = await _read_store_all(
+                app.state.settings, lambda s: s.get_all_trades(50000)
+            )
+            return JSONResponse(summarize_trades(trades_rows, equity=None))
+        rid = int(run_id) if run_id not in (None, "", "latest") else None
+        trades_rows = await _read_store(
+            app.state.settings, lambda s, r: s.get_trades(r, 50000), rid
+        )
+        eq_rows = await _read_store(
+            app.state.settings, lambda s, r: s.get_equity_curve(r, 100000), rid
+        )
+        return JSONResponse(summarize_trades(trades_rows, eq_rows))
 
     @app.websocket("/ws")
     async def ws(websocket: WebSocket) -> None:
@@ -122,6 +144,15 @@ async def _read_store(settings: Settings, fn, run_id: int | None = None) -> list
         if rid is None:
             return []
         return await fn(store, rid)
+    finally:
+        await store.close()
+
+
+async def _read_store_all(settings: Settings, fn) -> list:
+    """Like _read_store but not scoped to a single run (aggregate across all runs)."""
+    store = await TradeStore(settings.persistence.db_path).connect()
+    try:
+        return await fn(store)
     finally:
         await store.close()
 

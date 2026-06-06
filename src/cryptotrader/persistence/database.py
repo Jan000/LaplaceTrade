@@ -261,6 +261,14 @@ class TradeStore:
             rows = await cur.fetchall()
         return [dict(r) for r in rows]
 
+    async def get_all_trades(self, limit: int = 10000) -> list[dict[str, Any]]:
+        """Return the most recent ``limit`` trades across ALL runs (newest first)."""
+        async with self._conn.execute(
+            "SELECT * FROM trades ORDER BY id DESC LIMIT ?", (limit,)
+        ) as cur:
+            rows = await cur.fetchall()
+        return [dict(r) for r in rows]
+
     async def get_equity_curve(self, run_id: int, limit: int = 5000) -> list[dict[str, Any]]:
         """Return equity samples for a run in chronological order."""
         async with self._conn.execute(

@@ -41,6 +41,14 @@
   code{background:#0d1018;padding:1px 5px;border-radius:4px;}
   .row{display:flex;gap:10px;align-items:center;margin-bottom:10px;}
   .hidden{display:none;}
+  /* analytics */
+  .stat-grid{display:grid;grid-template-columns:repeat(6,1fr);gap:10px;}
+  .stat{background:var(--panel2);border:1px solid var(--line);border-radius:9px;padding:10px 12px;}
+  .stat .k{color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.4px;}
+  .stat .v{font-size:18px;font-weight:600;margin-top:4px;}
+  #t-table th{cursor:pointer;user-select:none;white-space:nowrap;}
+  #t-table th:hover{color:var(--txt);}
+  @media(max-width:1100px){.stat-grid{grid-template-columns:repeat(3,1fr);}}
 </style>
 </head>
 <body>
@@ -51,6 +59,7 @@
   <div class="spacer"></div>
   <div class="controls">
     <button id="tab-monitor" class="primary">Monitor</button>
+    <button id="tab-trades" class="ghost">Trades &amp; Analytics</button>
     <button id="tab-settings" class="ghost">Settings &amp; Training</button>
     <select id="mode"><option value="simulation">Simulation</option><option value="live">Live data</option></select>
     <label id="real-wrap" class="hidden" title="Place REAL orders on the exchange (requires API keys). Paper fills otherwise.">
@@ -80,6 +89,44 @@
   <div class="card wide"><h2>Recent Trades</h2><div class="tbl-wrap"><table>
     <thead><tr><th>Side</th><th>Entry</th><th>Exit</th><th>Net PnL</th><th>Efficiency</th><th>Reason</th><th>Exit</th></tr></thead>
     <tbody id="trades"><tr><td colspan="7" class="flat">No trades yet.</td></tr></tbody></table></div></div>
+</main>
+
+<!-- ============ TRADES & ANALYTICS ============ -->
+<main id="view-trades" class="hidden">
+  <div class="card wide">
+    <div class="row">
+      <h2 style="margin:0">Trades &amp; Analytics</h2><div class="spacer"></div>
+      <span class="sym">Source</span>
+      <select id="t-run"></select>
+      <button id="t-reload" class="ghost">Reload</button>
+      <button id="t-csv" class="ghost">Export CSV</button>
+    </div>
+    <div id="t-stats" class="stat-grid"></div>
+  </div>
+
+  <div class="card wide"><h2>Cumulative net PnL</h2><canvas id="t-chart" height="70"></canvas></div>
+
+  <div class="card wide">
+    <div class="row" style="flex-wrap:wrap">
+      <h2 style="margin:0">All trades</h2><div class="spacer"></div>
+      <select id="f-side"><option value="">All sides</option><option value="LONG">Long</option><option value="SHORT">Short</option></select>
+      <select id="f-result"><option value="">All results</option><option value="win">Wins</option><option value="loss">Losses</option><option value="be">Break-even</option></select>
+      <select id="f-reason"><option value="">All exits</option></select>
+      <input type="text" id="f-search" placeholder="search…" style="width:130px">
+      <span id="t-count" class="sym"></span>
+    </div>
+    <div class="tbl-wrap" style="max-height:460px">
+      <table id="t-table">
+        <thead><tr>
+          <th data-k="run_id">Run</th><th data-k="exit_time">Exit time</th><th data-k="sideName">Side</th>
+          <th data-k="quantity">Qty</th><th data-k="entry_price">Entry</th><th data-k="exit_price">Exit</th>
+          <th data-k="gross_pnl">Gross</th><th data-k="fees">Fees</th><th data-k="net_pnl">Net PnL</th>
+          <th data-k="efficiency_ratio">Eff</th><th data-k="hold">Hold</th><th data-k="exit_reason">Reason</th>
+        </tr></thead>
+        <tbody id="t-rows"><tr><td colspan="12" class="flat">No trades.</td></tr></tbody>
+      </table>
+    </div>
+  </div>
 </main>
 
 <!-- ============ SETTINGS & TRAINING ============ -->
@@ -138,10 +185,18 @@ const fmt=(n,d=2)=>(n??0).toLocaleString(undefined,{minimumFractionDigits:d,maxi
 const sign=(n)=>n>0?"pos":n<0?"neg":"";
 
 /* ---------- view switching ---------- */
-$("tab-monitor").onclick=()=>{ $("view-monitor").classList.remove("hidden"); $("view-settings").classList.add("hidden");
-  $("tab-monitor").className="primary"; $("tab-settings").className="ghost"; };
-$("tab-settings").onclick=()=>{ $("view-settings").classList.remove("hidden"); $("view-monitor").classList.add("hidden");
-  $("tab-settings").className="primary"; $("tab-monitor").className="ghost"; loadConfig(); loadModel(); pollTrain(true); };
+const TABS=["monitor","trades","settings"];
+function showTab(name){
+  for(const t of TABS){
+    $("view-"+t).classList.toggle("hidden",t!==name);
+    $("tab-"+t).className=(t===name)?"primary":"ghost";
+  }
+  if(name==="settings"){loadConfig(); loadModel(); loadKeys(); pollTrain(true);}
+  if(name==="trades"){refreshRunSelectors(); loadTrades();}
+}
+$("tab-monitor").onclick=()=>showTab("monitor");
+$("tab-trades").onclick=()=>showTab("trades");
+$("tab-settings").onclick=()=>showTab("settings");
 
 /* ---------- monitor ---------- */
 const chart=new Chart($("chart"),{type:"line",data:{labels:[],datasets:[{data:[],borderColor:"#3b82f6",
@@ -200,6 +255,7 @@ function setRunning(r){$("start").disabled=r;$("stop").disabled=!r;$("mode").dis
 $("start").onclick=async()=>{
   const real=$("mode").value==="live"&&$("real-orders").checked;
   if(real&&!confirm("Place REAL orders on the exchange with live funds? This is not a simulation.")) return;
+  viewingRun=null; $("run-select").value="";   // a new run -> leave any historical view
   setRunning(true);
   try{const x=await fetch("/api/start",{method:"POST",headers:{"Content-Type":"application/json"},
       body:JSON.stringify({mode:$("mode").value,real_orders:real})});
@@ -280,17 +336,20 @@ function pollTrain(loop){fetch("/api/train/status").then(r=>r.json()).then(s=>{
 
 /* ---------- run history browser ---------- */
 const RUNS={};  // id -> run meta
-async function loadRuns(){
-  try{const runs=await fetch("/api/runs?limit=100").then(r=>r.json());
+function runLabel(r){const ret=r.initial_equity?((r.final_equity??r.initial_equity)/r.initial_equity-1)*100:0;
+  const when=(r.started_at||"").slice(0,16).replace("T"," ");
+  return `#${r.id} · ${r.symbol} · ${r.mode} · ${when} · ${ret>=0?"+":""}${ret.toFixed(1)}% (${r.n_trades} tr)`;}
+async function refreshRunSelectors(){
+  try{const runs=await fetch("/api/runs?limit=200").then(r=>r.json());
+    runs.forEach(r=>RUNS[r.id]=r);
+    const opts=runs.map(r=>`<option value="${r.id}">${runLabel(r)}</option>`).join("");
     const sel=$("run-select"); const keep=sel.value;
-    sel.innerHTML=`<option value="">Live / current</option>`+runs.map(r=>{
-      RUNS[r.id]=r; const ret=r.initial_equity?((r.final_equity??r.initial_equity)/r.initial_equity-1)*100:0;
-      const when=(r.started_at||"").slice(0,16).replace("T"," ");
-      return `<option value="${r.id}">#${r.id} · ${r.symbol} · ${r.mode} · ${when} · ${ret>=0?"+":""}${ret.toFixed(1)}% (${r.n_trades} tr)</option>`;
-    }).join("");
-    sel.value=keep;
+    sel.innerHTML=`<option value="">Live / current</option>`+opts; sel.value=keep;
+    const tsel=$("t-run"); if(tsel){const tkeep=tsel.value;
+      tsel.innerHTML=`<option value="">Latest run</option><option value="all">All runs</option>`+opts; tsel.value=tkeep;}
   }catch(e){}
 }
+const loadRuns=refreshRunSelectors;  // back-compat alias used by render()
 function renderHistorical(run,trades){
   $("sym").textContent=run.symbol||"—";
   $("mode-label").textContent=`run #${run.id} · ${run.mode}`;
@@ -362,9 +421,103 @@ function pollJob(kind,loop){fetch(`/api/job/status?kind=${kind}`).then(r=>r.json
   if(!s.running){clearInterval(valTimer); valTimer=null;}
 }).catch(()=>{clearInterval(valTimer);valTimer=null;});}
 
-/* settings tab also loads keys; monitor init loads the run list */
-const _origSettings=$("tab-settings").onclick;
-$("tab-settings").onclick=(e)=>{_origSettings(e); loadKeys();};
-loadRuns();
+/* ---------- Trades & Analytics ---------- */
+let TRADES=[];                       // normalised rows for the current source
+let tSort={k:"exit_time",dir:-1};    // default: newest exits first
+const tChart=new Chart($("t-chart"),{type:"line",data:{labels:[],datasets:[{data:[],
+  borderColor:"#16c784",backgroundColor:"rgba(22,199,132,.12)",fill:true,tension:.1,pointRadius:0,borderWidth:2}]},
+  options:{responsive:true,animation:false,plugins:{legend:{display:false}},
+  scales:{x:{display:false},y:{ticks:{color:"#8a97a8"},grid:{color:"#1b2230"}}}}});
+function fmtDur(sec){if(!sec)return"—";const m=Math.round(sec/60);
+  if(m<60)return m+"m"; const h=Math.floor(m/60); return h+"h"+(m%60?` ${m%60}m`:"");}
+function pf(v){return v==null?"∞":fmt(v,2);}
+function statCard(k,v,cls){return `<div class="stat"><div class="k">${k}</div><div class="v ${cls||''}">${v}</div></div>`;}
+function renderStats(s){
+  const g=$("t-stats");
+  const side=Object.entries(s.by_side||{}).map(([k,v])=>`${k} ${v.n} · ${fmt(v.win_rate*100,0)}%W · $${fmt(v.net_pnl,0)}`).join(" | ")||"—";
+  const reasons=Object.entries(s.by_reason||{}).map(([k,v])=>`${k}: ${v.n} ($${fmt(v.net_pnl,0)})`).join(" | ")||"—";
+  g.innerHTML=[
+    statCard("Trades",s.n_trades),
+    statCard("Win rate",fmt(s.win_rate*100,1)+"%"),
+    statCard("Profit factor",pf(s.profit_factor)),
+    statCard("Net PnL","$"+fmt(s.net_pnl,2),sign(s.net_pnl)),
+    statCard("Expectancy","$"+fmt(s.expectancy,2),sign(s.expectancy)),
+    statCard("Max drawdown",fmt(s.max_drawdown_pct,1)+"%","neg"),
+    statCard("Avg win","$"+fmt(s.avg_win,2),"pos"),
+    statCard("Avg loss","$"+fmt(s.avg_loss,2),"neg"),
+    statCard("Payoff ratio",pf(s.payoff_ratio)),
+    statCard("Largest win","$"+fmt(s.largest_win,2),"pos"),
+    statCard("Largest loss","$"+fmt(s.largest_loss,2),"neg"),
+    statCard("Total fees","$"+fmt(s.total_fees,2)),
+    statCard("Avg efficiency",fmt(s.avg_efficiency*100,1)+"%"),
+    statCard("Avg hold",fmtDur(s.avg_hold_seconds)),
+    statCard("Max consec W/L",`${s.max_consec_wins} / ${s.max_consec_losses}`),
+    statCard("Return",fmt(s.return_pct,2)+"%",sign(s.return_pct)),
+    statCard("By side",`<span style="font-size:12px">${side}</span>`),
+    statCard("By exit",`<span style="font-size:12px">${reasons}</span>`),
+  ].join("");
+  // cumulative PnL over trades, chronological
+  const chron=[...TRADES].sort((a,b)=>(a.exit_time||"").localeCompare(b.exit_time||""));
+  let cum=0; const cumv=chron.map(t=>{cum+=t.net_pnl;return cum;});
+  tChart.data.labels=chron.map((_,i)=>i+1); tChart.data.datasets[0].data=cumv; tChart.update("none");
+}
+function normTrade(t,i){return {...t, idx:i, sideName:t.side===1?"LONG":(t.side===-1?"SHORT":String(t.side)),
+  hold:(()=>{const a=Date.parse(t.entry_time),b=Date.parse(t.exit_time);return (a&&b)?(b-a)/1000:0;})()};}
+async function loadTrades(){
+  const v=$("t-run").value; const q=v?`?run_id=${v}&limit=20000`:`?limit=20000`;
+  try{
+    const [tr,st]=await Promise.all([
+      fetch("/api/trades"+q).then(r=>r.json()),
+      fetch("/api/stats"+(v?`?run_id=${v}`:"")).then(r=>r.json())]);
+    TRADES=(tr||[]).map(normTrade);
+    // populate exit-reason filter from data
+    const reasons=[...new Set(TRADES.map(t=>t.exit_reason).filter(Boolean))];
+    $("f-reason").innerHTML=`<option value="">All exits</option>`+reasons.map(r=>`<option value="${r}">${r}</option>`).join("");
+    renderStats(st); applyTradeFilters();
+  }catch(e){$("t-rows").innerHTML=`<tr><td colspan="12" class="flat">Could not load trades.</td></tr>`;}
+}
+function applyTradeFilters(){
+  const side=$("f-side").value, res=$("f-result").value, reason=$("f-reason").value;
+  const q=$("f-search").value.trim().toLowerCase();
+  let rows=TRADES.filter(t=>{
+    if(side&&t.sideName!==side)return false;
+    if(res==="win"&&!(t.net_pnl>0))return false;
+    if(res==="loss"&&!(t.net_pnl<0))return false;
+    if(res==="be"&&t.net_pnl!==0)return false;
+    if(reason&&t.exit_reason!==reason)return false;
+    if(q){const hay=`${t.sideName} ${t.exit_reason} ${t.entry_price} ${t.exit_price} ${t.exit_time}`.toLowerCase();
+      if(!hay.includes(q))return false;}
+    return true;
+  });
+  const k=tSort.k,d=tSort.dir;
+  rows.sort((a,b)=>{const x=a[k],y=b[k];
+    if(x==null)return 1; if(y==null)return -1;
+    return (typeof x==="number"?x-y:String(x).localeCompare(String(y)))*d;});
+  const showRun=($("t-run").value==="all");
+  $("t-count").textContent=`${rows.length} / ${TRADES.length} trades`;
+  $("t-rows").innerHTML=rows.length?rows.map(t=>`<tr>
+    <td>${showRun?("#"+(t.run_id??"")):"—"}</td>
+    <td class="reason">${(t.exit_time||"").slice(0,19).replace("T"," ")}</td>
+    <td><span class="pill ${t.sideName}">${t.sideName}</span></td>
+    <td>${fmt(t.quantity,4)}</td><td>$${fmt(t.entry_price)}</td><td>$${fmt(t.exit_price)}</td>
+    <td class="${sign(t.gross_pnl)}">$${fmt(t.gross_pnl,2)}</td><td class="reason">$${fmt(t.fees,2)}</td>
+    <td class="${sign(t.net_pnl)}">$${fmt(t.net_pnl,2)}</td><td>${fmt((t.efficiency_ratio||0)*100,0)}%</td>
+    <td class="reason">${fmtDur(t.hold)}</td><td class="reason">${t.exit_reason||""}</td></tr>`).join("")
+    :`<tr><td colspan="12" class="flat">No trades match the filters.</td></tr>`;
+}
+$("t-run").onchange=loadTrades;
+$("t-reload").onclick=loadTrades;
+["f-side","f-result","f-reason"].forEach(id=>$(id).onchange=applyTradeFilters);
+$("f-search").oninput=applyTradeFilters;
+document.querySelectorAll("#t-table th").forEach(th=>th.onclick=()=>{
+  const k=th.dataset.k; tSort=(tSort.k===k)?{k,dir:-tSort.dir}:{k,dir:1}; applyTradeFilters();});
+$("t-csv").onclick=()=>{
+  const cols=["run_id","entry_time","exit_time","sideName","quantity","entry_price","exit_price","gross_pnl","fees","net_pnl","efficiency_ratio","hold","exit_reason"];
+  const lines=[cols.join(",")].concat(TRADES.map(t=>cols.map(c=>t[c]??"").join(",")));
+  const blob=new Blob([lines.join("\n")],{type:"text/csv"});
+  const a=document.createElement("a"); a.href=URL.createObjectURL(blob); a.download="trades.csv"; a.click();};
+
+/* ---------- init ---------- */
+refreshRunSelectors();
 </script>
 </body></html>

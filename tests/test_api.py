@@ -24,6 +24,11 @@ def test_dashboard_and_state(tmp_path) -> None:
         assert "active" in model and "exists" in model
         assert model["active"] in {"trained model", "momentum baseline"}
 
+        stats = client.get("/api/stats").json()
+        assert stats["n_trades"] == 0 and "profit_factor" in stats and "by_side" in stats
+        assert client.get("/api/stats?run_id=all").json()["n_trades"] == 0
+        assert client.get("/api/trades?run_id=all").json() == []
+
 
 def test_runs_keys_and_jobs(tmp_path, monkeypatch) -> None:
     import cryptotrader.config as cfg
