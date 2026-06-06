@@ -23,13 +23,18 @@ def _trade() -> Trade:
 async def test_roundtrip_trade_and_equity(tmp_path) -> None:
     async with TradeStore(tmp_path / "t.sqlite") as store:
         run_id = await store.start_run(
-            mode="paper", symbol="BTC/USDT", exchange="binance", initial_equity=10_000.0,
+            mode="live", symbol="BTC/USDT", exchange="binance", initial_equity=10_000.0,
+            environment="live",
         )
         await store.record_trade(run_id, _trade())
         await store.record_equity(run_id, datetime.now(tz=timezone.utc), 10_148.8)
         await store.record_features(run_id, datetime.now(tz=timezone.utc), {"atr": 12.3})
 
         assert await store.latest_run_id() == run_id
+        runs = await store.list_runs()
+        assert runs[0]["environment"] == "live"
+        assert len(await store.get_all_trades(environment="live")) == 1
+        assert await store.get_all_trades(environment="simulation") == []
         trades = await store.get_trades(run_id)
         assert len(trades) == 1
         assert trades[0]["exit_reason"] == "trailing_stop"

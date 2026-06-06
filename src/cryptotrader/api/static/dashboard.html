@@ -96,7 +96,14 @@
   <div class="card wide">
     <div class="row">
       <h2 style="margin:0">Trades &amp; Analytics</h2><div class="spacer"></div>
-      <span class="sym">Source</span>
+      <span class="sym">Environment</span>
+      <select id="t-env">
+        <option value="">All environments</option>
+        <option value="simulation">Simulation / training</option>
+        <option value="paper">Paper (live data)</option>
+        <option value="live">Real money</option>
+      </select>
+      <span class="sym">Run</span>
       <select id="t-run"></select>
       <button id="t-reload" class="ghost">Reload</button>
       <button id="t-csv" class="ghost">Export CSV</button>
@@ -220,7 +227,9 @@ function render(s){
   prevStatus=s.status;
   if(viewingRun!==null) return;
   $("sym").textContent=s.symbol||"—";
-  $("mode-label").textContent=s.status==="running"?`${s.mode} · running`:s.status;
+  const envtxt=s.environment==="live"?"⚠ REAL MONEY":(s.environment||s.mode);
+  $("mode-label").textContent=s.status==="running"?`${envtxt} · running`:s.status;
+  $("mode-label").style.color=(s.status==="running"&&s.environment==="live")?"var(--red)":"";
   $("status-dot").className="dot "+(s.status||"idle");
   $("equity").textContent="$"+fmt(s.equity);
   const r=$("ret"); r.textContent=fmt(s.total_return_pct)+"%"; r.className="value "+sign(s.total_return_pct);
@@ -335,24 +344,36 @@ function pollTrain(loop){fetch("/api/train/status").then(r=>r.json()).then(s=>{
 }).catch(()=>{clearInterval(trainTimer);trainTimer=null;});}
 
 /* ---------- run history browser ---------- */
-const RUNS={};  // id -> run meta
+const RUNS={};        // id -> run meta
+let RUNS_LIST=[];     // newest-first array
+const ENV_LABEL={simulation:"sim",paper:"paper",live:"REAL"};
 function runLabel(r){const ret=r.initial_equity?((r.final_equity??r.initial_equity)/r.initial_equity-1)*100:0;
   const when=(r.started_at||"").slice(0,16).replace("T"," ");
-  return `#${r.id} · ${r.symbol} · ${r.mode} · ${when} · ${ret>=0?"+":""}${ret.toFixed(1)}% (${r.n_trades} tr)`;}
+  const env=ENV_LABEL[r.environment]||r.environment||r.mode;
+  return `#${r.id} · ${env} · ${r.symbol} · ${when} · ${ret>=0?"+":""}${ret.toFixed(1)}% (${r.n_trades} tr)`;}
 async function refreshRunSelectors(){
-  try{const runs=await fetch("/api/runs?limit=200").then(r=>r.json());
-    runs.forEach(r=>RUNS[r.id]=r);
-    const opts=runs.map(r=>`<option value="${r.id}">${runLabel(r)}</option>`).join("");
+  try{RUNS_LIST=await fetch("/api/runs?limit=500").then(r=>r.json());
+    RUNS_LIST.forEach(r=>RUNS[r.id]=r);
     const sel=$("run-select"); const keep=sel.value;
-    sel.innerHTML=`<option value="">Live / current</option>`+opts; sel.value=keep;
-    const tsel=$("t-run"); if(tsel){const tkeep=tsel.value;
-      tsel.innerHTML=`<option value="">Latest run</option><option value="all">All runs</option>`+opts; tsel.value=tkeep;}
+    sel.innerHTML=`<option value="">Live / current</option>`+
+      RUNS_LIST.map(r=>`<option value="${r.id}">${runLabel(r)}</option>`).join("");
+    sel.value=keep;
+    refreshTradeRuns();
   }catch(e){}
+}
+function refreshTradeRuns(){
+  const tsel=$("t-run"); if(!tsel)return; const keep=tsel.value;
+  const env=$("t-env").value;
+  const runs=RUNS_LIST.filter(r=>!env||r.environment===env);
+  tsel.innerHTML=`<option value="all">All matching runs</option>`+
+    runs.map(r=>`<option value="${r.id}">${runLabel(r)}</option>`).join("");
+  tsel.value=[...tsel.options].some(o=>o.value===keep)?keep:"all";
 }
 const loadRuns=refreshRunSelectors;  // back-compat alias used by render()
 function renderHistorical(run,trades){
   $("sym").textContent=run.symbol||"—";
-  $("mode-label").textContent=`run #${run.id} · ${run.mode}`;
+  $("mode-label").textContent=`run #${run.id} · ${run.environment||run.mode}`;
+  $("mode-label").style.color="";
   $("status-dot").className="dot stopped";
   const fin=run.final_equity??run.initial_equity, init=run.initial_equity||0;
   $("equity").textContent="$"+fmt(fin);
@@ -464,11 +485,12 @@ function renderStats(s){
 function normTrade(t,i){return {...t, idx:i, sideName:t.side===1?"LONG":(t.side===-1?"SHORT":String(t.side)),
   hold:(()=>{const a=Date.parse(t.entry_time),b=Date.parse(t.exit_time);return (a&&b)?(b-a)/1000:0;})()};}
 async function loadTrades(){
-  const v=$("t-run").value; const q=v?`?run_id=${v}&limit=20000`:`?limit=20000`;
+  const v=$("t-run").value||"all"; const env=$("t-env").value;
+  const qs=(v==="all")?`run_id=all${env?`&env=${env}`:""}`:`run_id=${v}`;
   try{
     const [tr,st]=await Promise.all([
-      fetch("/api/trades"+q).then(r=>r.json()),
-      fetch("/api/stats"+(v?`?run_id=${v}`:"")).then(r=>r.json())]);
+      fetch(`/api/trades?${qs}&limit=20000`).then(r=>r.json()),
+      fetch(`/api/stats?${qs}`).then(r=>r.json())]);
     TRADES=(tr||[]).map(normTrade);
     // populate exit-reason filter from data
     const reasons=[...new Set(TRADES.map(t=>t.exit_reason).filter(Boolean))];
@@ -505,6 +527,7 @@ function applyTradeFilters(){
     <td class="reason">${fmtDur(t.hold)}</td><td class="reason">${t.exit_reason||""}</td></tr>`).join("")
     :`<tr><td colspan="12" class="flat">No trades match the filters.</td></tr>`;
 }
+$("t-env").onchange=()=>{refreshTradeRuns(); loadTrades();};
 $("t-run").onchange=loadTrades;
 $("t-reload").onclick=loadTrades;
 ["f-side","f-result","f-reason"].forEach(id=>$(id).onchange=applyTradeFilters);

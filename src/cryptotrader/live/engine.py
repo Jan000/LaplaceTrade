@@ -125,6 +125,7 @@ class LiveTradingEngine:
                 exchange=self._settings.exchange.id,
                 initial_equity=self._portfolio.initial_equity,
                 config=self._settings.model_dump(mode="json"),
+                environment=self._state.environment,
             )
 
     async def _on_bar(self, event: MarketEvent) -> None:

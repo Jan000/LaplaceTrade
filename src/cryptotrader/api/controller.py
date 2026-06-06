@@ -67,11 +67,14 @@ class EngineController:
                 data_handler = LiveDataHandler(feed)
                 execution = self._build_execution(real_orders)
                 self.settings.mode = RunMode.LIVE
+                # paper = live data + simulated fills; live = REAL orders/money.
+                environment = "live" if real_orders else "paper"
             else:
                 ohlcv = self._simulation_ohlcv()
                 data_handler = ReplayDataHandler(ohlcv, delay=0.01)
                 execution = PaperExecutionHandler(self.settings.execution)
                 self.settings.mode = RunMode.BACKTEST
+                environment = "simulation"
 
             # Persistence is best-effort: if the DB can't be opened (e.g. a
             # read-only or network filesystem that rejects SQLite WAL), the
@@ -90,6 +93,7 @@ class EngineController:
 
             self.state = EngineState(symbol=self.settings.exchange.symbol)
             self.state.mode = mode
+            self.state.environment = environment
             self._engine = LiveTradingEngine(
                 data_handler=data_handler,
                 feature_engine=feature_engine,

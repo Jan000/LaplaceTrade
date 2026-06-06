@@ -43,7 +43,8 @@ CREATE TABLE IF NOT EXISTS runs (
     symbol      TEXT    NOT NULL,
     exchange    TEXT    NOT NULL,
     initial_equity REAL NOT NULL,
-    config_json TEXT
+    config_json TEXT,
+    environment TEXT    DEFAULT 'simulation'   -- simulation | paper | live (real money)
 );
 
 CREATE TABLE IF NOT EXISTS trades (
@@ -126,9 +127,17 @@ class TradeStore:
         except Exception:
             logger.warning("WAL journal unavailable; using default journal mode.")
         await self._db.executescript(_SCHEMA)
+        # Migration: older DBs predate the runs.environment column.
+        await self._ensure_column("runs", "environment", "TEXT DEFAULT 'simulation'")
         await self._db.commit()
         logger.info("TradeStore connected at %s", self.db_path)
         return self
+
+    async def _ensure_column(self, table: str, col: str, decl: str) -> None:
+        async with self._db.execute(f"PRAGMA table_info({table})") as cur:
+            cols = [r["name"] for r in await cur.fetchall()]
+        if col not in cols:
+            await self._db.execute(f"ALTER TABLE {table} ADD COLUMN {col} {decl}")
 
     async def close(self) -> None:
         if self._db is not None:
@@ -158,11 +167,12 @@ class TradeStore:
         exchange: str,
         initial_equity: float,
         config: dict[str, Any] | None = None,
+        environment: str = "simulation",
     ) -> int:
         """Create a run row and return its id (foreign key for all other rows)."""
         cur = await self._conn.execute(
             "INSERT INTO runs (started_at, mode, symbol, exchange, initial_equity, "
-            "config_json) VALUES (?, ?, ?, ?, ?, ?)",
+            "config_json, environment) VALUES (?, ?, ?, ?, ?, ?, ?)",
             (
                 _iso(datetime.now(tz=timezone.utc)),
                 mode,
@@ -170,6 +180,7 @@ class TradeStore:
                 exchange,
                 initial_equity,
                 json.dumps(config or {}, default=str),
+                environment,
             ),
         )
         await self._conn.commit()
@@ -243,6 +254,8 @@ class TradeStore:
         """Run metadata (newest first) with trade count + last equity, for the run picker."""
         async with self._conn.execute(
             "SELECT r.id, r.started_at, r.mode, r.symbol, r.exchange, r.initial_equity, "
+            "COALESCE(r.environment, CASE r.mode WHEN 'backtest' THEN 'simulation' "
+            " ELSE 'paper' END) AS environment, "
             "(SELECT COUNT(*) FROM trades t WHERE t.run_id = r.id) AS n_trades, "
             "(SELECT e.equity FROM equity_snapshots e WHERE e.run_id = r.id "
             " ORDER BY e.id DESC LIMIT 1) AS final_equity "
@@ -261,11 +274,22 @@ class TradeStore:
             rows = await cur.fetchall()
         return [dict(r) for r in rows]
 
-    async def get_all_trades(self, limit: int = 10000) -> list[dict[str, Any]]:
-        """Return the most recent ``limit`` trades across ALL runs (newest first)."""
-        async with self._conn.execute(
-            "SELECT * FROM trades ORDER BY id DESC LIMIT ?", (limit,)
-        ) as cur:
+    async def get_all_trades(
+        self, limit: int = 10000, environment: str | None = None
+    ) -> list[dict[str, Any]]:
+        """Most recent ``limit`` trades across all runs (optionally one environment)."""
+        if environment:
+            sql = (
+                "SELECT t.* FROM trades t JOIN runs r ON t.run_id = r.id "
+                "WHERE COALESCE(r.environment, CASE r.mode WHEN 'backtest' "
+                "THEN 'simulation' ELSE 'paper' END) = ? "
+                "ORDER BY t.id DESC LIMIT ?"
+            )
+            params: tuple = (environment, limit)
+        else:
+            sql = "SELECT * FROM trades ORDER BY id DESC LIMIT ?"
+            params = (limit,)
+        async with self._conn.execute(sql, params) as cur:
             rows = await cur.fetchall()
         return [dict(r) for r in rows]
 

@@ -85,9 +85,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return JSONResponse({"status": "stopped"})
 
     @app.get("/api/trades")
-    async def trades(limit: int = 200, run_id: str | None = None) -> JSONResponse:
+    async def trades(
+        limit: int = 200, run_id: str | None = None, env: str | None = None
+    ) -> JSONResponse:
         if run_id == "all":
-            rows = await _read_store_all(app.state.settings, lambda s: s.get_all_trades(limit))
+            rows = await _read_store_all(
+                app.state.settings, lambda s: s.get_all_trades(limit, env or None)
+            )
             return JSONResponse(rows)
         rid = int(run_id) if run_id not in (None, "", "latest") else None
         rows = await _read_store(app.state.settings, lambda s, r: s.get_trades(r, limit), rid)
@@ -102,13 +106,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return JSONResponse(rows)
 
     @app.get("/api/stats")
-    async def stats(run_id: str | None = None) -> JSONResponse:
+    async def stats(run_id: str | None = None, env: str | None = None) -> JSONResponse:
         """Rich trade statistics for one run, the latest run, or all runs (run_id=all)."""
         from cryptotrader.backtest.analytics import summarize_trades
 
         if run_id == "all":
             trades_rows = await _read_store_all(
-                app.state.settings, lambda s: s.get_all_trades(50000)
+                app.state.settings, lambda s: s.get_all_trades(50000, env or None)
             )
             return JSONResponse(summarize_trades(trades_rows, equity=None))
         rid = int(run_id) if run_id not in (None, "", "latest") else None

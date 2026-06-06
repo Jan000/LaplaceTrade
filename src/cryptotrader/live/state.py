@@ -20,6 +20,7 @@ class EngineState:
     """Mutable snapshot of everything the dashboard needs to render."""
 
     mode: str = "paper"
+    environment: str = "simulation"  # simulation | paper | live (real money)
     symbol: str = ""
     status: str = "idle"  # idle | running | stopped | error
     initial_equity: float = 0.0
@@ -51,6 +52,7 @@ class EngineState:
         """Plain-dict view for JSON serialisation."""
         return {
             "mode": self.mode,
+            "environment": self.environment,
             "symbol": self.symbol,
             "status": self.status,
             "initial_equity": round(self.initial_equity, 2),
