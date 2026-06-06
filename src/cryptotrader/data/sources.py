@@ -1,21 +1,13 @@
 # src/cryptotrader/data/sources.py
 """Optional alternative data sources, merged onto the OHLCV bar index.
 
-Everything here is best-effort and fail-safe: any source that errors (network,
-unsupported market, geo-block) logs a warning and is skipped, so a missing source
-never breaks training — the feature engine zero-fills absent columns.
+Everything here is best-effort and fail-safe: any source that errors or fails to
+align logs a warning and is skipped, so a missing source never breaks training —
+the feature engine zero-fills absent/empty columns.
 
-Sources
--------
-* taker_flow   : taker-buy base volume + trade count (Binance klines carry these
-                 for free; this is the single most useful add — bar-level order
-                 flow with full history).
-* funding      : perpetual funding rate (ccxt ``fetch_funding_rate_history``).
-* open_interest: perpetual open interest (ccxt ``fetch_open_interest_history``).
-* cross_asset  : a second asset's close (e.g. ETH) for return + correlation.
-
-All series are forward-filled onto the OHLCV index (lower-frequency sources like
-funding/OI are stepped forward, never interpolated — no look-ahead).
+Sources: taker_flow (Binance klines: taker-buy base volume + trade count),
+funding (perp funding rate), open_interest (perp OI), cross_asset (2nd asset).
+Lower-frequency sources are forward-filled onto the bar index (no look-ahead).
 """
 
 from __future__ import annotations
@@ -28,11 +20,29 @@ import pandas as pd
 logger = logging.getLogger(__name__)
 
 
-def _align(series: pd.Series, index: pd.DatetimeIndex) -> pd.Series:
-    """Forward-fill a (possibly lower-frequency) series onto ``index``."""
+def _to_utc(idx: pd.DatetimeIndex) -> pd.DatetimeIndex:
+    return idx.tz_localize("UTC") if idx.tz is None else idx.tz_convert("UTC")
+
+
+def _exact_or_nearest(series: pd.Series, index: pd.DatetimeIndex) -> pd.Series:
+    """Align a same-frequency series onto ``index``: exact, else nearest within 1 bar."""
     if series is None or series.empty:
         return pd.Series(index=index, dtype=float)
     s = series[~series.index.duplicated(keep="last")].sort_index()
+    s.index = _to_utc(s.index)
+    col = s.reindex(index)
+    if col.notna().sum() == 0 and len(index) > 1:
+        tol = index[1] - index[0]
+        col = s.reindex(index, method="nearest", tolerance=tol)
+    return col
+
+
+def _align_ffill(series: pd.Series, index: pd.DatetimeIndex) -> pd.Series:
+    """Forward-fill a lower-frequency series onto ``index`` (step forward, no leak)."""
+    if series is None or series.empty:
+        return pd.Series(index=index, dtype=float)
+    s = series[~series.index.duplicated(keep="last")].sort_index()
+    s.index = _to_utc(s.index)
     return s.reindex(s.index.union(index)).ffill().reindex(index).ffill().bfill()
 
 
@@ -42,8 +52,7 @@ async def fetch_taker_flow(client, market_id: str, timeframe: str,
     getter = getattr(client, "publicGetKlines", None) or getattr(client, "public_get_klines", None)
     if getter is None:
         raise RuntimeError(
-            f"{client.id} has no raw-klines endpoint; taker flow is Binance-only. "
-            "Disable use_taker_flow or use exchange=binance."
+            f"{client.id} has no raw-klines endpoint; taker flow is Binance-only."
         )
     rows: list = []
     since = start_ms
@@ -59,20 +68,16 @@ async def fetch_taker_flow(client, market_id: str, timeframe: str,
             break
     if not rows:
         return pd.DataFrame()
-    # kline = [openTime,o,h,l,c,vol,closeTime,quoteVol,numTrades,takerBuyBase,takerBuyQuote,ignore]
     df = pd.DataFrame(rows)
+    # kline = [openTime,o,h,l,c,vol,closeTime,quoteVol,numTrades,takerBuyBase,takerBuyQuote,ignore]
     out = pd.DataFrame(
-        {
-            "taker_buy_base": df[9].astype(float),
-            "num_trades": df[8].astype(float),
-        },
+        {"taker_buy_base": df[9].astype(float), "num_trades": df[8].astype(float)},
         index=pd.to_datetime(df[0].astype("int64"), unit="ms", utc=True),
     )
     return out[~out.index.duplicated(keep="last")].sort_index()
 
 
 async def fetch_funding(client, symbol: str, start_ms: int) -> pd.Series:
-    """Perpetual funding-rate history as a time-indexed Series."""
     out: list = []
     since = start_ms
     while True:
@@ -90,7 +95,6 @@ async def fetch_funding(client, symbol: str, start_ms: int) -> pd.Series:
 
 
 async def fetch_open_interest(client, symbol: str, timeframe: str, start_ms: int) -> pd.Series:
-    """Perpetual open-interest history as a time-indexed Series."""
     out: list = []
     since = start_ms
     while True:
@@ -108,6 +112,14 @@ async def fetch_open_interest(client, symbol: str, timeframe: str, start_ms: int
     return pd.Series(vals, index=idx, name="open_interest")
 
 
+def _diag_misalign(name: str, src_index, out_index) -> None:
+    logger.warning(
+        "%s fetched but did not align with the bars (0 overlap). "
+        "First source ts=%s ; first bar ts=%s. Check timeframe/timezone.",
+        name, list(src_index[:3]), list(out_index[:3]),
+    )
+
+
 async def enrich_ohlcv(settings, ohlcv: pd.DataFrame, start: datetime, feed) -> pd.DataFrame:
     """Merge the enabled optional sources onto ``ohlcv`` (best-effort, fail-safe)."""
     f = settings.features
@@ -117,6 +129,7 @@ async def enrich_ohlcv(settings, ohlcv: pd.DataFrame, start: datetime, feed) -> 
         return ohlcv
 
     out = ohlcv.copy()
+    out.index = _to_utc(out.index)  # normalise so merges align
     start_ms = int(start.timestamp() * 1000)
     end_ms = int(out.index[-1].timestamp() * 1000) + 1
     client = feed._client or feed._make_client(pro=False)
@@ -126,19 +139,22 @@ async def enrich_ohlcv(settings, ohlcv: pd.DataFrame, start: datetime, feed) -> 
 
     if f.use_taker_flow:
         try:
-            market_id = symbol.replace("/", "")
-            flow = await fetch_taker_flow(client, market_id, tf, start_ms, end_ms)
+            flow = await fetch_taker_flow(client, symbol.replace("/", ""), tf, start_ms, end_ms)
             if not flow.empty:
-                out["taker_buy_base"] = flow["taker_buy_base"].reindex(out.index).ffill().bfill()
-                out["num_trades"] = flow["num_trades"].reindex(out.index).ffill().bfill()
-                logger.info("Merged taker-flow (%d rows)", len(flow))
+                tb = _exact_or_nearest(flow["taker_buy_base"], out.index)
+                nt = _exact_or_nearest(flow["num_trades"], out.index)
+                if tb.notna().sum() == 0:
+                    _diag_misalign("taker_flow", flow.index, out.index)
+                out["taker_buy_base"] = tb
+                out["num_trades"] = nt
+                logger.info("Merged taker-flow (%d rows, %d aligned)", len(flow), int(tb.notna().sum()))
         except Exception:
             logger.warning("taker_flow source unavailable; skipping.", exc_info=True)
 
     if f.use_funding:
         try:
             fr = await fetch_funding(client, symbol, start_ms)
-            out["funding_rate"] = _align(fr, out.index)
+            out["funding_rate"] = _align_ffill(fr, out.index)
             logger.info("Merged funding rate (%d points)", len(fr))
         except Exception:
             logger.warning("funding source unavailable; skipping.", exc_info=True)
@@ -146,7 +162,7 @@ async def enrich_ohlcv(settings, ohlcv: pd.DataFrame, start: datetime, feed) -> 
     if f.use_open_interest:
         try:
             oi = await fetch_open_interest(client, symbol, tf, start_ms)
-            out["open_interest"] = _align(oi, out.index)
+            out["open_interest"] = _align_ffill(oi, out.index)
             logger.info("Merged open interest (%d points)", len(oi))
         except Exception:
             logger.warning("open_interest source unavailable; skipping.", exc_info=True)
@@ -162,7 +178,9 @@ async def enrich_ohlcv(settings, ohlcv: pd.DataFrame, start: datetime, feed) -> 
             cross = await cross_feed.fetch_history(start)
             await cross_feed.close()
             if not cross.empty:
-                out["cross_close"] = cross["close"].reindex(out.index).ffill()
+                cc = cross["close"].copy()
+                cc.index = _to_utc(cc.index)
+                out["cross_close"] = _exact_or_nearest(cc, out.index).ffill()
                 logger.info("Merged cross-asset %s (%d rows)", f.cross_symbol, len(cross))
         except Exception:
             logger.warning("cross_asset source unavailable; skipping.", exc_info=True)
