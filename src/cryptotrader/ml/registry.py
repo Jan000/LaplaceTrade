@@ -48,7 +48,13 @@ def write_validation(kind: str, symbol: str, result: dict) -> None:
     p.parent.mkdir(parents=True, exist_ok=True)
     payload = {**result, "symbol": symbol, "kind": kind,
                "saved_at": datetime.now(tz=timezone.utc).isoformat()}
-    p.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    # default= coerces stray numpy scalars (np.bool_, np.float64, …) to native types so a
+    # value like a numpy bool can never break the write (it has no plain-bool subclassing).
+    p.write_text(
+        json.dumps(payload, indent=2,
+                   default=lambda o: o.item() if hasattr(o, "item") else str(o)),
+        encoding="utf-8",
+    )
 
 
 def read_validation(kind: str, symbol: str) -> dict | None:

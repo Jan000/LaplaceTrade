@@ -280,8 +280,8 @@ def main() -> None:
                 "compounded_return_pct": round(compounded, 2),
                 "mean_fold_return_pct": round(mean_r, 2),
                 "mean_profit_factor": round(mean_pf, 3),
-                "positive_folds": pos_folds, "splits": args.splits,
-                "robust": pos_folds >= args.splits - 1 and compounded > 0,
+                "positive_folds": int(pos_folds), "splits": int(args.splits),
+                "robust": bool(pos_folds >= args.splits - 1 and compounded > 0),
                 "verdict": verdict,
             })
         except Exception:

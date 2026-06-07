@@ -274,15 +274,24 @@ class TradeStore:
             rows = await cur.fetchall()
         return [dict(r) for r in rows]
 
-    async def symbol_summaries(self) -> list[dict[str, Any]]:
-        """Per-symbol realized trade stats across all runs (for the Symbols table)."""
+    async def symbol_summaries(self, include_simulation: bool = False) -> list[dict[str, Any]]:
+        """Per-symbol realized trade stats for the Symbols table.
+
+        By default EXCLUDES simulation runs: accelerated replays accumulate huge,
+        non-representative trade counts that would drown the decision-relevant signal.
+        So these columns reflect paper + real (live) behaviour; judge the *edge* from the
+        walk-forward / holdout results instead.
+        """
+        where = ("" if include_simulation else
+                 "WHERE COALESCE(r.environment, CASE r.mode WHEN 'backtest' THEN "
+                 "'simulation' ELSE 'paper' END) != 'simulation' ")
         async with self._conn.execute(
-            "SELECT symbol, COUNT(*) AS n_trades, "
-            "SUM(CASE WHEN net_pnl > 0 THEN 1 ELSE 0 END) AS wins, "
-            "SUM(net_pnl) AS net_pnl, AVG(efficiency_ratio) AS avg_efficiency, "
-            "SUM(CASE WHEN net_pnl > 0 THEN net_pnl ELSE 0 END) AS gross_win, "
-            "SUM(CASE WHEN net_pnl < 0 THEN -net_pnl ELSE 0 END) AS gross_loss "
-            "FROM trades GROUP BY symbol"
+            "SELECT t.symbol AS symbol, COUNT(*) AS n_trades, "
+            "SUM(CASE WHEN t.net_pnl > 0 THEN 1 ELSE 0 END) AS wins, "
+            "SUM(t.net_pnl) AS net_pnl, AVG(t.efficiency_ratio) AS avg_efficiency, "
+            "SUM(CASE WHEN t.net_pnl > 0 THEN t.net_pnl ELSE 0 END) AS gross_win, "
+            "SUM(CASE WHEN t.net_pnl < 0 THEN -t.net_pnl ELSE 0 END) AS gross_loss "
+            "FROM trades t JOIN runs r ON t.run_id = r.id " + where + "GROUP BY t.symbol"
         ) as cur:
             rows = await cur.fetchall()
         return [dict(r) for r in rows]
