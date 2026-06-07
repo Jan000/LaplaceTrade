@@ -245,6 +245,30 @@ def register_management_routes(app, controller) -> None:
         finally:
             await store.close()
 
+    @app.post("/api/runs/clear")
+    async def clear_runs(body: dict) -> JSONResponse:
+        """Delete persisted runs (+ trades/equity) for an environment, or all."""
+        from cryptotrader.persistence import TradeStore
+
+        if controller.is_running:
+            return JSONResponse(
+                {"status": "error", "error": "Stop the engine before clearing runs."},
+                status_code=400)
+        env = body.get("environment")
+        if env == "all":
+            env = None
+        try:
+            store = await TradeStore(app.state.settings.persistence.db_path).connect()
+        except Exception:
+            return JSONResponse({"status": "error", "error": "database unavailable"},
+                                status_code=400)
+        try:
+            n = await store.clear_runs(env)
+            return JSONResponse({"status": "cleared", "runs_deleted": n,
+                                 "environment": env or "all"})
+        finally:
+            await store.close()
+
 
 def _reload_settings(app, controller) -> None:
     new = Settings.load()

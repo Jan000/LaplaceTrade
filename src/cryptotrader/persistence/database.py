@@ -126,6 +126,9 @@ class TradeStore:
             await self._db.execute("PRAGMA synchronous=NORMAL;")
         except Exception:
             logger.warning("WAL journal unavailable; using default journal mode.")
+        # Wait (rather than fail with "database is locked") when another short-lived
+        # connection still holds the WAL write lock — common with our per-request stores.
+        await self._db.execute("PRAGMA busy_timeout=5000;")
         await self._db.executescript(_SCHEMA)
         # Migration: older DBs predate the runs.environment column.
         await self._ensure_column("runs", "environment", "TEXT DEFAULT 'simulation'")
@@ -295,6 +298,30 @@ class TradeStore:
         ) as cur:
             rows = await cur.fetchall()
         return [dict(r) for r in rows]
+
+    async def clear_runs(self, environment: str | None = None) -> int:
+        """Delete runs (and their trades / equity / feature rows) for an environment.
+
+        ``environment`` of ``None`` or ``"all"`` wipes everything. Returns the number of
+        runs removed. Used by the dashboard's "reset simulation / clear data" action.
+        """
+        if environment in (None, "all"):
+            async with self._conn.execute("SELECT id FROM runs") as cur:
+                ids = [r["id"] for r in await cur.fetchall()]
+        else:
+            async with self._conn.execute(
+                "SELECT id FROM runs WHERE COALESCE(environment, CASE mode WHEN 'backtest' "
+                "THEN 'simulation' ELSE 'paper' END) = ?", (environment,),
+            ) as cur:
+                ids = [r["id"] for r in await cur.fetchall()]
+        if not ids:
+            return 0
+        qm = ",".join("?" * len(ids))
+        for tbl in ("feature_rows", "equity_snapshots", "trades"):
+            await self._conn.execute(f"DELETE FROM {tbl} WHERE run_id IN ({qm})", ids)
+        await self._conn.execute(f"DELETE FROM runs WHERE id IN ({qm})", ids)
+        await self._conn.commit()
+        return len(ids)
 
     async def get_all_trades(
         self, limit: int = 10000, environment: str | None = None

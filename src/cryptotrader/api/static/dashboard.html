@@ -163,6 +163,7 @@
       <select id="t-run"></select>
       <button id="t-reload" class="ghost">Reload</button>
       <button id="t-csv" class="ghost">Export CSV</button>
+      <button id="t-clear" class="danger" title="Delete persisted runs &amp; trades for the selected environment">Clear data…</button>
     </div>
     <div id="t-stats" class="stat-grid"></div>
   </div>
@@ -750,6 +751,19 @@ $("t-csv").onclick=()=>{
   const lines=[cols.join(",")].concat(src.map(t=>cols.map(c=>t[c]??"").join(",")));
   const blob=new Blob([lines.join("\n")],{type:"text/csv"});
   const a=document.createElement("a"); a.href=URL.createObjectURL(blob); a.download="trades.csv"; a.click();};
+$("t-clear").onclick=async()=>{
+  const env=$("t-env").value;            // "" = all environments
+  const labels={simulation:"simulation",paper:"paper (live-data)",live:"REAL-money",
+                "":"ALL"};
+  const what=labels[env]||env;
+  if(!confirm(`Delete ALL persisted runs & trades for ${what} environment(s)? This cannot be undone.`)) return;
+  const r=await fetch("/api/runs/clear",{method:"POST",headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({environment:env||"all"})});
+  const b=await r.json();
+  if(!r.ok){alert("Could not clear: "+(b.error||r.statusText)); return;}
+  alert(`Deleted ${b.runs_deleted} run(s).`);
+  refreshRunSelectors(); loadTrades(); loadSymbols(); refreshGate();
+  fetch("/api/state").then(x=>x.json()).then(s=>{if(!(s.status==="running"))loadHistory();});};
 
 /* ---------- Symbols table ---------- */
 let SYMBOL_ADDED=[], TRADE_SET=[], SYM_ROWS=[];

@@ -76,6 +76,19 @@ def test_runs_keys_and_jobs(tmp_path, monkeypatch) -> None:
         assert client.post("/api/job", json={"kind": "bogus"}).status_code == 400
 
 
+def test_clear_runs_endpoint(tmp_path) -> None:
+    """/api/runs/clear wipes the selected environment (no keys reload to keep the db_path)."""
+    settings = Settings()
+    settings.persistence.db_path = tmp_path / "clear.sqlite"
+    app = create_app(settings)
+    with TestClient(app) as client:
+        r = client.post("/api/runs/clear", json={"environment": "simulation"})
+        assert r.status_code == 200
+        body = r.json()
+        assert body["status"] == "cleared" and body["environment"] == "simulation"
+        assert body["runs_deleted"] == 0  # empty isolated DB
+
+
 def test_controller_aggregate_snapshot() -> None:
     """The controller merges per-symbol engine states into one aggregate snapshot."""
     from cryptotrader.api.controller import EngineController

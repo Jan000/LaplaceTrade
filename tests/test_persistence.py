@@ -47,3 +47,21 @@ async def test_latest_run_none_on_empty(tmp_path) -> None:
     async with TradeStore(tmp_path / "empty.sqlite") as store:
         assert await store.latest_run_id() is None
         assert await store.get_trades(0) == []
+
+
+async def test_clear_runs_by_environment(tmp_path) -> None:
+    async with TradeStore(tmp_path / "c.sqlite") as store:
+        sim = await store.start_run(mode="backtest", symbol="BTC/USDT", exchange="binance",
+                                    initial_equity=1e4, environment="simulation")
+        await store.record_trade(sim, _trade())
+        await store.record_equity(sim, datetime.now(tz=timezone.utc), 10_000.0)
+        live = await store.start_run(mode="live", symbol="BTC/USDT", exchange="binance",
+                                     initial_equity=1e4, environment="live")
+        await store.record_trade(live, _trade())
+
+        assert await store.clear_runs("simulation") == 1          # only the sim run
+        assert await store.get_trades(sim) == []                  # its trades gone
+        assert len(await store.get_trades(live)) == 1             # live untouched
+        assert len(await store.list_runs()) == 1
+        assert await store.clear_runs() == 1                      # wipe the rest
+        assert await store.list_runs() == []
