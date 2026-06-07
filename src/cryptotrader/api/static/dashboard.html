@@ -44,8 +44,9 @@
   details.adv>summary{cursor:pointer;color:var(--accent);font-size:12.5px;padding:8px 2px;list-style:none;}
   details.adv>summary::before{content:"▸ ";} details.adv[open]>summary::before{content:"▾ ";}
   details.adv .cfg-grid{margin:8px 0;}
-  #train-log,#val-log{white-space:pre-wrap;font-family:ui-monospace,monospace;font-size:11.5px;color:var(--muted);
-             background:#0d1018;border:1px solid var(--line);border-radius:8px;padding:10px;max-height:260px;overflow:auto;}
+  .joblog{white-space:pre-wrap;font-family:ui-monospace,monospace;font-size:11.5px;color:var(--muted);
+             background:#0d1018;border:1px solid var(--line);border-radius:8px;padding:10px;max-height:280px;overflow:auto;margin:6px 0;}
+  .job{border-bottom:1px solid var(--line);padding:7px 0;}
   code{background:#0d1018;padding:1px 5px;border-radius:4px;}
   .row{display:flex;gap:10px;align-items:center;margin-bottom:10px;}
   .hidden{display:none;}
@@ -56,7 +57,7 @@
   .stat .v{font-size:18px;font-weight:600;margin-top:4px;}
   button.btn-xs{padding:3px 8px;font-size:11px;margin:0 1px;}
   #sym-rows td{white-space:nowrap;}
-  #t-table th{cursor:pointer;user-select:none;white-space:nowrap;}
+  #t-table th,#sym-table th[data-k]{cursor:pointer;user-select:none;white-space:nowrap;}
   #t-table th:hover{color:var(--txt);}
   @media(max-width:1100px){.stat-grid{grid-template-columns:repeat(3,1fr);}}
 </style>
@@ -122,18 +123,26 @@
       <button id="sym-reload" class="ghost">Reload</button>
     </div>
     <div class="tbl-wrap" style="max-height:540px">
-      <table>
-        <thead><tr><th>Symbol</th><th>Trade</th><th>Status</th><th>Model</th><th>Trained</th>
-          <th>Trades</th><th>Win%</th><th>PF</th><th>Eff</th><th>Net PnL</th>
-          <th>Walk-fwd</th><th>Holdout</th><th>Actions</th></tr></thead>
+      <table id="sym-table">
+        <thead><tr><th data-k="symbol">Symbol</th><th>Trade</th><th>Status</th>
+          <th data-k="model_timeframe">Model</th><th data-k="trained_at">Trained</th>
+          <th data-k="n_trades">Trades</th><th data-k="win_rate">Win%</th><th data-k="profit_factor">PF</th>
+          <th data-k="avg_efficiency">Eff</th><th data-k="net_pnl">Net PnL</th>
+          <th data-k="_wf">Walk-fwd</th><th data-k="_ho">Holdout</th><th>Actions</th></tr></thead>
         <tbody id="sym-rows"><tr><td colspan="13" class="flat">Loading…</td></tr></tbody>
       </table>
     </div>
     <div class="sym" style="margin-top:8px;font-size:11.5px">
-      <b>Trade</b> = include in concurrent live/sim trading (equity split across ticked symbols).
-      <b>Set active</b> sets the primary symbol. <b>Train / WF / HO</b> run for that symbol and open the log in
-      Settings. <b>Walk-fwd / Holdout</b> show the last out-of-sample result; <b>Eff</b> = avg efficiency; other
-      stats are realized trades from past runs.</div>
+      <b>Trade</b> = include in concurrent live/sim trading (equity is split across ticked symbols).
+      <b>Train / WF / HO</b> start a job for that symbol (several can run at once); watch them below.
+      <b>Walk-fwd / Holdout</b> show the last out-of-sample result, <b>Eff</b> = avg efficiency; other stats are
+      realized trades. Click a column header to sort.</div>
+  </div>
+
+  <div class="card wide">
+    <div class="row"><h2 style="margin:0">Jobs (training &amp; validation)</h2><div class="spacer"></div>
+      <button id="jobs-reload" class="ghost">Refresh</button></div>
+    <div id="jobs-list"><div class="flat">No training / validation jobs yet.</div></div>
   </div>
 </main>
 
@@ -185,33 +194,16 @@
 <!-- ============ SETTINGS & TRAINING ============ -->
 <main id="view-settings" class="hidden">
 
-  <!-- 1) Train & validate (the workflow) -->
+  <!-- 1) Model -->
   <div class="card wide">
-    <div class="row" style="flex-wrap:wrap">
-      <h2 style="margin:0">1 · Train &amp; validate</h2><div class="spacer"></div>
-      <span class="sym">Target symbol</span>
-      <input type="text" id="job-symbol" placeholder="config default" style="width:130px">
+    <div class="row"><h2 style="margin:0">1 · Model (configured symbol)</h2><div class="spacer"></div>
+      <button id="goto-symbols" class="primary">Train &amp; validate in the Symbols tab →</button>
     </div>
-    <div id="model-status" class="sym" style="margin:2px 0 12px">Model: …</div>
-    <div class="row" style="flex-wrap:wrap">
-      <button id="train-btn" class="primary">Train now</button>
-      <span id="train-state" class="sym">idle</span>
-      <div class="spacer"></div>
-      <span class="sym">history days</span>
-      <input type="number" id="val-days" placeholder="config" style="width:80px">
-      <button id="wf-btn" class="ghost">Walk-forward</button>
-      <button id="ho-btn" class="ghost">Holdout</button>
-      <span id="wf-state" class="sym">idle</span>
-    </div>
-    <div class="sym" style="margin:8px 0 6px;font-size:11.5px">Leave target blank for the configured symbol.
-      Training writes <code>models/model_&lt;SYMBOL&gt;.pkl</code>; validation is the out-of-sample edge check —
-      only go live if it is ROBUST. Manage/switch symbols in the <b>Symbols</b> tab.</div>
-    <div class="cfg-grid" style="grid-template-columns:1fr 1fr;gap:14px">
-      <div><div class="sym" style="font-size:11px;margin-bottom:4px">Training log</div>
-        <div id="train-log">Train output will appear here…</div></div>
-      <div><div class="sym" style="font-size:11px;margin-bottom:4px">Validation log</div>
-        <div id="val-log">Walk-forward / holdout output will appear here…</div></div>
-    </div>
+    <div id="model-status" class="sym" style="margin:2px 0 4px">Model: …</div>
+    <div class="sym" style="font-size:11.5px">Train, walk-forward and holdout for any symbol (several at once,
+      with live logs) are managed in the <b>Symbols</b> tab. Each coin gets its own
+      <code>models/model_&lt;SYMBOL&gt;.pkl</code>; trade several concurrently via the <b>Trade</b> checkboxes.</div>
+  </div>
   </div>
 
   <!-- 2) Parameters -->
@@ -255,9 +247,9 @@ function showTab(name){
     $("view-"+t).classList.toggle("hidden",t!==name);
     $("tab-"+t).className=(t===name)?"primary":"ghost";
   }
-  if(name==="settings"){loadConfig(); loadModel(); loadKeys(); pollTrain(true);}
+  if(name==="settings"){loadConfig(); loadModel(); loadKeys();}
   if(name==="trades"){refreshRunSelectors(); loadTrades();}
-  if(name==="symbols"){loadSymbols();}
+  if(name==="symbols"){loadSymbols(); refreshJobs();}
 }
 $("tab-monitor").onclick=()=>showTab("monitor");
 $("tab-symbols").onclick=()=>showTab("symbols");
@@ -483,7 +475,6 @@ $("cfg-save").onclick=async()=>{$("cfg-msg").textContent="saving…";
 /* ---------- model status + real-orders gate ---------- */
 let MODELINFO=null;
 let GATE={real_ok:false,trade_count:1,trade_symbols:[]};
-function jobSymbolArgs(){const s=$("job-symbol").value.trim(); return s?["--symbol",s]:[];}
 function realOrdersAllowed(){return !!GATE.real_ok;}
 function updateGateBadge(){
   const live=$("mode").value==="live"; const b=$("model-badge");
@@ -520,19 +511,49 @@ async function loadModel(){   // detailed status of the CONFIGURED symbol, shown
   }catch(e){$("model-status").textContent="Model: (status unavailable)";}
 }
 
-/* ---------- training ---------- */
-let trainTimer=null;
-$("train-btn").onclick=async()=>{
-  $("train-btn").disabled=true; $("train-state").textContent="starting…";
+/* ---------- jobs (concurrent training / walk-forward / holdout) ---------- */
+let JOBS=[], JOB_OPEN={}, jobsTimer=null, prevRunning=0;
+const cssid=k=>k.replace(/[^a-zA-Z0-9]/g,"_");
+async function startJobFor(kind,symbol){
   await fetch("/api/job",{method:"POST",headers:{"Content-Type":"application/json"},
-    body:JSON.stringify({kind:"train",args:jobSymbolArgs()})});
-  pollTrain(true);};
-function pollTrain(loop){fetch("/api/train/status").then(r=>r.json()).then(s=>{
-  $("train-state").textContent=s.status; $("train-log").textContent=s.log||"(no output yet)";
-  $("train-log").scrollTop=$("train-log").scrollHeight; $("train-btn").disabled=s.running;
-  if(loop){clearInterval(trainTimer); trainTimer=setInterval(()=>pollTrain(false),2000);}
-  if(!s.running){clearInterval(trainTimer); trainTimer=null; loadModel(); refreshGate();}  /* refresh model + gate when done */
-}).catch(()=>{clearInterval(trainTimer);trainTimer=null;});}
+    body:JSON.stringify({kind,symbol})});
+  JOB_OPEN[`${kind}:${symbol||"config"}`]=true;   // auto-open its log
+  refreshJobs();
+}
+async function refreshJobs(){
+  try{const d=await fetch("/api/jobs").then(r=>r.json()); JOBS=d.jobs||[];}catch(e){JOBS=[];}
+  renderJobs();
+  const running=JOBS.filter(j=>j.running).length;
+  if(running===0 && prevRunning>0){ loadSymbols(); refreshGate(); loadModel(); } // jobs done -> stats update
+  prevRunning=running;
+  const need = running>0 || Object.keys(JOB_OPEN).some(k=>JOB_OPEN[k]);
+  clearInterval(jobsTimer); jobsTimer = need ? setInterval(refreshJobs,2000) : null;
+}
+function renderJobs(){
+  const box=$("jobs-list");
+  if(!JOBS.length){box.innerHTML=`<div class="flat">No training / validation jobs yet.</div>`;return;}
+  box.innerHTML=JOBS.map(j=>{
+    const open=JOB_OPEN[j.key];
+    const col=j.status==="done"?"var(--green)":j.status==="failed"?"var(--red)":j.running?"var(--accent)":"var(--muted)";
+    return `<div class="job"><div class="row" style="margin:0">
+        <span><b>${j.kind}</b> · ${j.symbol||"config"}</span>
+        <span class="sym" style="color:${col}">&nbsp;${j.status}${j.running?"…":""}</span>
+        <div class="spacer"></div>
+        <button class="ghost btn-xs" data-log="${j.key}">${open?"Hide log":"Log"}</button>
+      </div>${open?`<div class="joblog" id="joblog-${cssid(j.key)}">loading…</div>`:""}</div>`;
+  }).join("");
+  box.querySelectorAll("button[data-log]").forEach(b=>b.onclick=()=>{
+    JOB_OPEN[b.dataset.log]=!JOB_OPEN[b.dataset.log]; renderJobs(); refreshJobs();});
+  JOBS.forEach(j=>{ if(JOB_OPEN[j.key]) loadJobLog(j.key); });
+}
+async function loadJobLog(key){
+  try{const d=await fetch("/api/job/log?key="+encodeURIComponent(key)).then(r=>r.json());
+    const el=document.getElementById("joblog-"+cssid(key));
+    if(el){el.textContent=d.log||"(no output yet)"; el.scrollTop=el.scrollHeight;}
+  }catch(e){}
+}
+$("jobs-reload").onclick=refreshJobs;
+$("goto-symbols").onclick=()=>showTab("symbols");
 
 /* ---------- run history browser ---------- */
 const RUNS={};        // id -> run meta
@@ -610,29 +631,6 @@ $("keys-save").onclick=async()=>{$("keys-msg").textContent="saving…";
   $("api-key").value=""; $("api-secret").value=""; loadKeys();};
 $("keys-clear").onclick=async()=>{if(!confirm("Remove the stored API keys?"))return;
   await fetch("/api/keys",{method:"DELETE"}); $("keys-msg").textContent="cleared"; loadKeys();};
-
-/* ---------- validation jobs (walk-forward / holdout) ---------- */
-let valTimer=null;
-function startJob(kind){
-  const days=$("val-days").value;
-  const args=jobSymbolArgs().concat(days?["--days",days]:[]);
-  $("wf-btn").disabled=true; $("ho-btn").disabled=true; $("wf-state").textContent="starting…";
-  fetch("/api/job",{method:"POST",headers:{"Content-Type":"application/json"},
-    body:JSON.stringify({kind,args})}).then(r=>r.json()).then(j=>{
-      if(j.status==="busy"){$("wf-state").textContent="busy — another job is running";}
-      pollJob(kind,true);
-    });
-}
-$("wf-btn").onclick=()=>startJob("walkforward");
-$("ho-btn").onclick=()=>startJob("holdout");
-function pollJob(kind,loop){fetch(`/api/job/status?kind=${kind}`).then(r=>r.json()).then(s=>{
-  $("wf-state").textContent=`${kind}: ${s.status}`;
-  $("val-log").textContent=s.log||"(no output yet)"; $("val-log").scrollTop=$("val-log").scrollHeight;
-  const anyRunning=!!s.running_kind;                 // one job at a time -> disable both while busy
-  $("wf-btn").disabled=anyRunning; $("ho-btn").disabled=anyRunning;
-  if(loop){clearInterval(valTimer); valTimer=setInterval(()=>pollJob(kind,false),2000);}
-  if(!s.running){clearInterval(valTimer); valTimer=null;}
-}).catch(()=>{clearInterval(valTimer);valTimer=null;});}
 
 /* ---------- Trades & Analytics ---------- */
 let TRADES=[];                       // normalised rows for the current source
@@ -738,70 +736,68 @@ $("t-csv").onclick=()=>{
   const a=document.createElement("a"); a.href=URL.createObjectURL(blob); a.download="trades.csv"; a.click();};
 
 /* ---------- Symbols table ---------- */
-let SYMBOL_ADDED=[];
-let TRADE_SET=[];
+let SYMBOL_ADDED=[], TRADE_SET=[], SYM_ROWS=[];
+let symSort={k:"_wf",dir:-1};   // default: best walk-forward first
+const valRet=v=>v?(v.compounded_return_pct!=null?v.compounded_return_pct:v.return_pct):null;
 function valdot(v){if(!v)return `<span class="reason">—</span>`;
-  const ret=v.compounded_return_pct!=null?v.compounded_return_pct:v.return_pct;
-  const robust=v.robust!=null?v.robust:(ret>0);
-  const col=ret>0?'var(--green)':(ret<0?'var(--red)':'var(--muted)');
-  const extra=v.verdict?` (${v.positive_folds}/${v.splits})`:"";
-  return `<span style="color:${col}" title="${v.verdict||''}">${ret>=0?'+':''}${fmt(ret,1)}%${extra}</span>`;}
+  const ret=valRet(v); const col=ret>0?'var(--green)':(ret<0?'var(--red)':'var(--muted)');
+  const folds=(v.positive_folds!=null&&v.splits!=null)?` (${v.positive_folds}/${v.splits})`:"";
+  const tip=(v.verdict||"")+(v.mean_profit_factor!=null?` · PF ${v.mean_profit_factor}`:(v.profit_factor!=null?` · PF ${v.profit_factor}`:""));
+  return `<span style="color:${col}" title="${tip}">${ret>=0?'+':''}${fmt(ret,1)}%${folds}</span>`;}
 async function loadSymbols(){
   try{
     const d=await fetch("/api/symbols").then(r=>r.json());
     TRADE_SET=d.trade_symbols||[];
     const rows=(d.symbols||[]).slice();
     for(const a of SYMBOL_ADDED){if(!rows.some(r=>r.symbol===a))
-      rows.push({symbol:a,active:a===d.configured,trade:TRADE_SET.includes(a),has_model:false,n_trades:0,win_rate:0,net_pnl:0,profit_factor:0});}
-    $("sym-rows").innerHTML = rows.length ? rows.map(r=>{
-      const model=r.has_model
-        ? `<span style="color:${r.matches?'var(--green)':'var(--amber)'}" title="trained ${r.train_symbols?('· pooled '+r.train_symbols.join(',')):''}">✓ ${r.model_timeframe||''}${r.matches?'':' (tf≠)'}</span>`
-        : `<span class="reason">—</span>`;
-      const when=r.trained_at?new Date(r.trained_at).toLocaleDateString():"—";
-      const pfv=r.profit_factor==null?"∞":fmt(r.profit_factor,2);
-      const eff=r.avg_efficiency==null?"—":fmt(r.avg_efficiency*100,1)+"%";
-      const act=r.active?`<span class="pill LONG">active</span>`:"";
-      return `<tr>
-        <td><b>${r.symbol}</b></td>
-        <td><input type="checkbox" data-trade="${r.symbol}" ${r.trade?'checked':''}></td>
-        <td>${act}</td><td>${model}</td><td class="reason">${when}</td>
-        <td>${r.n_trades}</td><td>${fmt((r.win_rate||0)*100,1)}%</td><td>${pfv}</td><td>${eff}</td>
-        <td class="${sign(r.net_pnl)}">$${fmt(r.net_pnl,2)}</td>
-        <td>${valdot(r.walkforward)}</td><td>${valdot(r.holdout)}</td>
-        <td style="white-space:nowrap">
-          <button class="ghost btn-xs" data-act="active" data-sym="${r.symbol}" ${r.active?'disabled':''}>Set active</button>
-          <button class="primary btn-xs" data-act="train" data-sym="${r.symbol}">Train</button>
-          <button class="ghost btn-xs" data-act="walkforward" data-sym="${r.symbol}">WF</button>
-          <button class="ghost btn-xs" data-act="holdout" data-sym="${r.symbol}">HO</button>
-        </td></tr>`;
-    }).join("") : `<tr><td colspan="13" class="flat">No symbols.</td></tr>`;
-    $("sym-rows").querySelectorAll("button[data-act]").forEach(b=>
-      b.onclick=()=>symAction(b.dataset.act,b.dataset.sym));
-    $("sym-rows").querySelectorAll("input[data-trade]").forEach(c=>
-      c.onchange=()=>toggleTrade(c.dataset.trade,c.checked));
+      rows.push({symbol:a,trade:TRADE_SET.includes(a),has_model:false,n_trades:0,win_rate:0,net_pnl:0,profit_factor:0,avg_efficiency:null});}
+    rows.forEach(r=>{r._wf=valRet(r.walkforward); r._ho=valRet(r.holdout);});
+    SYM_ROWS=rows; renderSymbols();
   }catch(e){$("sym-rows").innerHTML=`<tr><td colspan="13" class="flat">Could not load symbols.</td></tr>`;}
+}
+function renderSymbols(){
+  const k=symSort.k,dir=symSort.dir;
+  const rows=SYM_ROWS.slice().sort((a,b)=>{let x=a[k],y=b[k];
+    if(x==null)return 1; if(y==null)return -1;
+    return (typeof x==="number"?x-y:String(x).localeCompare(String(y)))*dir;});
+  $("sym-rows").innerHTML = rows.length ? rows.map(r=>{
+    const model=r.has_model
+      ? `<span style="color:${r.matches?'var(--green)':'var(--amber)'}" title="trained${r.train_symbols?(' · pooled '+r.train_symbols.join(',')):''}${r.n_train_rows?(' · '+r.n_train_rows+' rows'):''}">✓ ${r.model_timeframe||''}${r.matches?'':' (tf≠)'}</span>`
+      : `<span class="reason">—</span>`;
+    const when=r.trained_at?new Date(r.trained_at).toLocaleDateString():"—";
+    const pfv=r.profit_factor==null?"∞":fmt(r.profit_factor,2);
+    const eff=r.avg_efficiency==null?"—":fmt(r.avg_efficiency*100,1)+"%";
+    return `<tr>
+      <td><b>${r.symbol}</b></td>
+      <td><input type="checkbox" data-trade="${r.symbol}" ${r.trade?'checked':''}></td>
+      <td class="reason">${r.has_model?(r.matches?'ready':'tf≠'):'no model'}</td>
+      <td>${model}</td><td class="reason">${when}</td>
+      <td>${r.n_trades}</td><td>${fmt((r.win_rate||0)*100,1)}%</td><td>${pfv}</td><td>${eff}</td>
+      <td class="${sign(r.net_pnl)}">$${fmt(r.net_pnl,2)}</td>
+      <td>${valdot(r.walkforward)}</td><td>${valdot(r.holdout)}</td>
+      <td style="white-space:nowrap">
+        <button class="primary btn-xs" data-act="train" data-sym="${r.symbol}">Train</button>
+        <button class="ghost btn-xs" data-act="walkforward" data-sym="${r.symbol}">WF</button>
+        <button class="ghost btn-xs" data-act="holdout" data-sym="${r.symbol}">HO</button>
+      </td></tr>`;
+  }).join("") : `<tr><td colspan="13" class="flat">No symbols.</td></tr>`;
+  $("sym-rows").querySelectorAll("button[data-act]").forEach(b=>
+    b.onclick=()=>symAction(b.dataset.act,b.dataset.sym));
+  $("sym-rows").querySelectorAll("input[data-trade]").forEach(c=>
+    c.onchange=()=>toggleTrade(c.dataset.trade,c.checked));
 }
 async function toggleTrade(sym,on){
   const set=new Set(TRADE_SET);
   if(on)set.add(sym); else set.delete(sym);
   TRADE_SET=[...set];
+  const row=SYM_ROWS.find(r=>r.symbol===sym); if(row)row.trade=on;
   await fetch("/api/config",{method:"POST",headers:{"Content-Type":"application/json"},
     body:JSON.stringify({data:{trade_symbols:TRADE_SET}})});
   refreshGate();
 }
-async function symAction(act,sym){
-  if(act==="active"){
-    await fetch("/api/config",{method:"POST",headers:{"Content-Type":"application/json"},
-      body:JSON.stringify({exchange:{symbol:sym}})});
-    await loadSymbols(); loadModel(); refreshGate(); return;
-  }
-  $("job-symbol").value=sym;
-  await fetch("/api/job",{method:"POST",headers:{"Content-Type":"application/json"},
-    body:JSON.stringify({kind:act,args:["--symbol",sym]})});
-  showTab("settings");
-  if(act==="train"){$("train-state").textContent="starting…"; pollTrain(true);}
-  else{$("wf-state").textContent=`${act}: starting…`; pollJob(act,true);}
-}
+function symAction(act,sym){ startJobFor(act,sym); }   // start job; no navigation, log shows in Jobs panel
+document.querySelectorAll("#sym-table th[data-k]").forEach(th=>th.onclick=()=>{
+  const k=th.dataset.k; symSort=(symSort.k===k)?{k,dir:-symSort.dir}:{k,dir:-1}; renderSymbols();});
 $("sym-add-btn").onclick=()=>{const v=$("sym-add").value.trim().toUpperCase();
   if(v){if(!SYMBOL_ADDED.includes(v))SYMBOL_ADDED.push(v); $("sym-add").value=""; loadSymbols();}};
 $("sym-add").addEventListener("keydown",e=>{if(e.key==="Enter")$("sym-add-btn").click();});
@@ -809,5 +805,6 @@ $("sym-reload").onclick=loadSymbols;
 
 /* ---------- init ---------- */
 refreshRunSelectors();
+refreshJobs();
 </script>
 </body></html>

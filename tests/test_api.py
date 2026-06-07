@@ -71,8 +71,8 @@ def test_runs_keys_and_jobs(tmp_path, monkeypatch) -> None:
         client.delete("/api/keys")
         assert client.get("/api/keys").json()["has_key"] is False
 
-        status = client.get("/api/job/status?kind=walkforward").json()
-        assert status["kind"] == "walkforward" and "running" in status
+        jobs = client.get("/api/jobs").json()
+        assert jobs["jobs"] == [] and jobs["any_running"] is False
         assert client.post("/api/job", json={"kind": "bogus"}).status_code == 400
 
 
@@ -93,6 +93,29 @@ def test_controller_aggregate_snapshot() -> None:
     assert snap["n_trades"] == 6 and snap["status"] == "running"
     assert snap["position"] is None  # multi-symbol -> per-symbol breakdown instead
     assert {s["symbol"] for s in snap["symbols"]} == {"BTC/USDT", "ETH/USDT"}
+
+
+def test_jobmanager_concurrent_logic(tmp_path, monkeypatch) -> None:
+    """JobManager tracks several jobs at once, keyed by kind:symbol (no real subprocess)."""
+    import cryptotrader.api.management as mgmt
+
+    monkeypatch.setattr(mgmt, "LOG_DIR", tmp_path / "logs")
+    jm = mgmt.JobManager()
+
+    class FakeProc:
+        def __init__(self, rc): self.returncode = rc
+
+    jm._jobs["train:BTC/USDT"] = {"kind": "train", "symbol": "BTC/USDT",
+                                  "proc": FakeProc(None), "status": "running"}
+    jm._jobs["walkforward:ETH/USDT"] = {"kind": "walkforward", "symbol": "ETH/USDT",
+                                        "proc": FakeProc(0), "status": "done"}
+    assert mgmt.JobManager.key("train", "BTC/USDT") == "train:BTC/USDT"
+    assert mgmt.JobManager.key("holdout", None) == "holdout:config"
+    assert jm.any_running is True
+    by_key = {j["key"]: j for j in jm.list()}
+    assert by_key["train:BTC/USDT"]["running"] is True
+    assert by_key["walkforward:ETH/USDT"]["running"] is False
+    assert by_key["walkforward:ETH/USDT"]["status"] == "done"
 
 
 def test_symbols_table(tmp_path, monkeypatch) -> None:

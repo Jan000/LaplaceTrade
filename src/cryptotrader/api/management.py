@@ -48,12 +48,16 @@ def _redact(cfg: dict) -> dict:
     return cfg
 
 
-class JobManager:
-    """Runs one background job at a time (training / walk-forward / holdout).
+def _safe(symbol: str | None) -> str:
+    return (symbol or "config").replace("/", "").replace(":", "")
 
-    Each job is ``scripts/<x>.py`` as a subprocess; stdout+stderr stream to a
-    per-kind log file so each dashboard panel can show its own last output even
-    after a different job has run.
+
+class JobManager:
+    """Runs background jobs (training / walk-forward / holdout) CONCURRENTLY.
+
+    Each job is ``scripts/<x>.py`` as a subprocess, keyed by ``kind:symbol`` with its own
+    log file, so several symbols can train/validate at once and each log is viewable
+    independently. Re-starting an identical job that is still running is rejected.
     """
 
     SCRIPTS = {
@@ -63,47 +67,57 @@ class JobManager:
     }
 
     def __init__(self) -> None:
-        self._proc: asyncio.subprocess.Process | None = None
-        self._kind: str | None = None
-        self.status: dict[str, str] = {k: "idle" for k in self.SCRIPTS}
+        self._jobs: dict[str, dict] = {}
 
-    @property
-    def running(self) -> bool:
-        return self._proc is not None and self._proc.returncode is None
+    @staticmethod
+    def key(kind: str, symbol: str | None) -> str:
+        return f"{kind}:{symbol or 'config'}"
 
-    @property
-    def running_kind(self) -> str | None:
-        return self._kind if self.running else None
+    def _log_path(self, kind: str, symbol: str | None) -> Path:
+        return LOG_DIR / f"job_{kind}_{_safe(symbol)}.log"
 
-    def _log_path(self, kind: str) -> Path:
-        return LOG_DIR / f"job_{kind}.log"
-
-    async def start(self, kind: str, extra_args: list[str] | None = None) -> str:
+    async def start(self, kind: str, symbol: str | None = None,
+                    extra_args: list[str] | None = None) -> tuple[str | None, str]:
         if kind not in self.SCRIPTS:
-            return "unknown_kind"
-        if self.running:
-            return "busy"
+            return None, "unknown_kind"
+        key = self.key(kind, symbol)
+        existing = self._jobs.get(key)
+        if existing and existing["proc"].returncode is None:
+            return key, "busy"  # this exact job is already running
         LOG_DIR.mkdir(parents=True, exist_ok=True)
-        logf = open(self._log_path(kind), "wb")
-        self._kind = kind
-        self.status[kind] = "running"
-        self._proc = await asyncio.create_subprocess_exec(
-            sys.executable, self.SCRIPTS[kind], *(extra_args or []),
+        args = (["--symbol", symbol] if symbol else []) + list(extra_args or [])
+        logf = open(self._log_path(kind, symbol), "wb")
+        proc = await asyncio.create_subprocess_exec(
+            sys.executable, self.SCRIPTS[kind], *args,
             stdout=logf, stderr=asyncio.subprocess.STDOUT,
         )
-        asyncio.create_task(self._wait(kind))
-        return "started"
+        self._jobs[key] = {"kind": kind, "symbol": symbol, "proc": proc, "status": "running"}
+        asyncio.create_task(self._wait(key))
+        return key, "started"
 
-    async def _wait(self, kind: str) -> None:
-        assert self._proc is not None
-        rc = await self._proc.wait()
-        self.status[kind] = "done" if rc == 0 else "failed"
-        self._proc = None
-        self._kind = None
+    async def _wait(self, key: str) -> None:
+        job = self._jobs[key]
+        rc = await job["proc"].wait()
+        job["status"] = "done" if rc == 0 else "failed"
 
-    def log_tail(self, kind: str, n: int = 8000) -> str:
+    def list(self) -> list[dict]:
+        out = []
+        for key, j in sorted(self._jobs.items()):
+            running = j["proc"].returncode is None
+            out.append({"key": key, "kind": j["kind"], "symbol": j["symbol"],
+                        "status": "running" if running else j["status"], "running": running})
+        return out
+
+    @property
+    def any_running(self) -> bool:
+        return any(j["proc"].returncode is None for j in self._jobs.values())
+
+    def log_tail(self, key: str, n: int = 8000) -> str:
+        j = self._jobs.get(key)
+        if not j:
+            return ""
         try:
-            return self._log_path(kind).read_text(errors="replace")[-n:]
+            return self._log_path(j["kind"], j["symbol"]).read_text(errors="replace")[-n:]
         except Exception:
             return ""
 
@@ -192,36 +206,25 @@ def register_management_routes(app, controller) -> None:
     @app.post("/api/job")
     async def start_job(body: dict) -> JSONResponse:
         kind = body.get("kind", "")
+        symbol = body.get("symbol") or None
         args = body.get("args") or []
         if not isinstance(args, list):
             args = []
-        result = await jobs.start(kind, [str(a) for a in args])
+        key, result = await jobs.start(kind, symbol, [str(a) for a in args])
         code = 200 if result in {"started", "busy"} else 400
-        return JSONResponse({"status": result, "kind": kind}, status_code=code)
+        return JSONResponse({"status": result, "key": key, "kind": kind, "symbol": symbol},
+                            status_code=code)
 
-    @app.get("/api/job/status")
-    async def job_status(kind: str = "train") -> JSONResponse:
-        return JSONResponse({
-            "kind": kind,
-            "status": jobs.status.get(kind, "idle"),
-            "running": jobs.running and jobs.running_kind == kind,
-            "running_kind": jobs.running_kind,
-            "log": jobs.log_tail(kind),
-        })
+    @app.get("/api/jobs")
+    async def list_jobs() -> JSONResponse:
+        return JSONResponse({"jobs": jobs.list(), "any_running": jobs.any_running})
 
-    # Back-compat aliases for the original training endpoints.
-    @app.post("/api/train")
-    async def train() -> JSONResponse:
-        result = await jobs.start("train")
-        return JSONResponse({"status": "already_running" if result == "busy" else result})
-
-    @app.get("/api/train/status")
-    async def train_status() -> JSONResponse:
-        return JSONResponse({
-            "status": jobs.status.get("train", "idle"),
-            "running": jobs.running and jobs.running_kind == "train",
-            "log": jobs.log_tail("train"),
-        })
+    @app.get("/api/job/log")
+    async def job_log(key: str) -> JSONResponse:
+        running = any(j["key"] == key and j["running"] for j in jobs.list())
+        status = next((j["status"] for j in jobs.list() if j["key"] == key), "unknown")
+        return JSONResponse({"key": key, "status": status, "running": running,
+                             "log": jobs.log_tail(key)})
 
     # ---------------------------------------------------------------- runs
     @app.get("/api/runs")
