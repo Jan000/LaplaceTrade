@@ -9,11 +9,14 @@
   :root{--bg:#0b0e14;--panel:#131722;--panel2:#1b2230;--line:#2a3344;--txt:#d6dee8;--muted:#8a97a8;
         --green:#16c784;--red:#ea3943;--accent:#3b82f6;--amber:#f59e0b;}
   *{box-sizing:border-box;} body{margin:0;font-family:system-ui,Segoe UI,Roboto,sans-serif;background:var(--bg);color:var(--txt);}
-  header{display:flex;align-items:center;gap:16px;padding:14px 22px;border-bottom:1px solid var(--line);background:var(--panel);position:sticky;top:0;z-index:10;}
+  header{display:flex;flex-direction:column;gap:11px;padding:12px 22px;border-bottom:1px solid var(--line);background:var(--panel);position:sticky;top:0;z-index:10;}
   header h1{font-size:16px;margin:0;letter-spacing:.3px;} .sym{color:var(--muted);font-size:13px;}
+  .topbar{display:flex;align-items:center;gap:12px;flex-wrap:wrap;}
+  .tabs{display:flex;gap:6px;flex-wrap:wrap;border-top:1px solid var(--line);padding-top:9px;}
+  .tabs button{padding:8px 16px;}
   .dot{width:9px;height:9px;border-radius:50%;display:inline-block;}
   .dot.running{background:var(--green);box-shadow:0 0 8px var(--green);} .dot.stopped,.dot.idle{background:var(--muted);} .dot.error{background:var(--red);}
-  .spacer{flex:1;} .controls{display:flex;align-items:center;gap:8px;}
+  .spacer{flex:1;} .controls{display:flex;align-items:center;gap:8px;flex-wrap:wrap;}
   select,button,input{background:var(--panel2);color:var(--txt);border:1px solid var(--line);border-radius:7px;padding:7px 12px;font-size:13px;}
   button{cursor:pointer;} button.primary{background:var(--accent);border-color:var(--accent);color:#fff;}
   button.danger{background:var(--red);border-color:var(--red);color:#fff;} button.ghost{background:transparent;}
@@ -60,23 +63,27 @@
 </head>
 <body>
 <header>
-  <span id="status-dot" class="dot idle"></span>
-  <h1>CryptoTrader <span class="sym" id="sym">—</span></h1>
-  <span class="sym" id="mode-label">idle</span>
-  <div class="spacer"></div>
-  <div class="controls">
+  <div class="topbar">
+    <span id="status-dot" class="dot idle"></span>
+    <h1>CryptoTrader <span class="sym" id="sym">—</span></h1>
+    <span class="sym" id="mode-label">idle</span>
+    <div class="spacer"></div>
+    <div class="controls">
+      <select id="mode"><option value="simulation">Simulation</option><option value="live">Live data</option></select>
+      <span id="model-badge" class="sym hidden" style="font-size:12px"></span>
+      <label id="real-wrap" class="hidden" title="Place REAL orders on the exchange (requires API keys). Paper fills otherwise.">
+        <input type="checkbox" id="real-orders"><span style="color:var(--amber);font-size:12.5px">&nbsp;real orders</span>
+      </label>
+      <button id="start" class="primary">Start</button>
+      <button id="stop" class="danger" disabled>Stop</button>
+    </div>
+  </div>
+  <nav class="tabs">
     <button id="tab-monitor" class="primary">Monitor</button>
     <button id="tab-symbols" class="ghost">Symbols</button>
     <button id="tab-trades" class="ghost">Trades &amp; Analytics</button>
     <button id="tab-settings" class="ghost">Settings &amp; Training</button>
-    <select id="mode"><option value="simulation">Simulation</option><option value="live">Live data</option></select>
-    <span id="model-badge" class="sym hidden" style="font-size:12px"></span>
-    <label id="real-wrap" class="hidden" title="Place REAL orders on the exchange (requires API keys). Paper fills otherwise.">
-      <input type="checkbox" id="real-orders"><span style="color:var(--amber);font-size:12.5px">&nbsp;real orders</span>
-    </label>
-    <button id="start" class="primary">Start</button>
-    <button id="stop" class="danger" disabled>Stop</button>
-  </div>
+  </nav>
 </header>
 
 <!-- ============ MONITOR ============ -->
@@ -169,9 +176,40 @@
 
 <!-- ============ SETTINGS & TRAINING ============ -->
 <main id="view-settings" class="hidden">
+
+  <!-- 1) Train & validate (the workflow) -->
+  <div class="card wide">
+    <div class="row" style="flex-wrap:wrap">
+      <h2 style="margin:0">1 · Train &amp; validate</h2><div class="spacer"></div>
+      <span class="sym">Target symbol</span>
+      <input type="text" id="job-symbol" placeholder="config default" style="width:130px">
+    </div>
+    <div id="model-status" class="sym" style="margin:2px 0 12px">Model: …</div>
+    <div class="row" style="flex-wrap:wrap">
+      <button id="train-btn" class="primary">Train now</button>
+      <span id="train-state" class="sym">idle</span>
+      <div class="spacer"></div>
+      <span class="sym">history days</span>
+      <input type="number" id="val-days" placeholder="config" style="width:80px">
+      <button id="wf-btn" class="ghost">Walk-forward</button>
+      <button id="ho-btn" class="ghost">Holdout</button>
+      <span id="wf-state" class="sym">idle</span>
+    </div>
+    <div class="sym" style="margin:8px 0 6px;font-size:11.5px">Leave target blank for the configured symbol.
+      Training writes <code>models/model_&lt;SYMBOL&gt;.pkl</code>; validation is the out-of-sample edge check —
+      only go live if it is ROBUST. Manage/switch symbols in the <b>Symbols</b> tab.</div>
+    <div class="cfg-grid" style="grid-template-columns:1fr 1fr;gap:14px">
+      <div><div class="sym" style="font-size:11px;margin-bottom:4px">Training log</div>
+        <div id="train-log">Train output will appear here…</div></div>
+      <div><div class="sym" style="font-size:11px;margin-bottom:4px">Validation log</div>
+        <div id="val-log">Walk-forward / holdout output will appear here…</div></div>
+    </div>
+  </div>
+
+  <!-- 2) Parameters -->
   <div class="card wide">
     <div class="row">
-      <h2 style="margin:0">All Parameters</h2><div class="spacer"></div>
+      <h2 style="margin:0">2 · Parameters</h2><div class="spacer"></div>
       <span id="cfg-msg" class="sym"></span>
       <button id="cfg-reload" class="ghost">Reload</button>
       <button id="cfg-save" class="primary">Save to config.yaml</button>
@@ -179,46 +217,21 @@
     <div id="cfg-form" class="cfg-grid"></div>
   </div>
 
+  <!-- 3) API keys (only for real trading) -->
   <div class="card wide">
     <div class="row">
-      <h2 style="margin:0">Exchange API Keys</h2><div class="spacer"></div>
+      <h2 style="margin:0">3 · Exchange API keys (real trading only)</h2><div class="spacer"></div>
       <span id="keys-msg" class="sym"></span>
     </div>
     <div id="keys-status" class="sym" style="margin-bottom:10px">…</div>
-    <div class="row">
-      <input type="password" id="api-key" placeholder="API key" style="flex:1" autocomplete="off">
-      <input type="password" id="api-secret" placeholder="API secret" style="flex:1" autocomplete="off">
+    <div class="row" style="flex-wrap:wrap">
+      <input type="password" id="api-key" placeholder="API key" style="flex:1;min-width:180px" autocomplete="off">
+      <input type="password" id="api-secret" placeholder="API secret" style="flex:1;min-width:180px" autocomplete="off">
       <button id="keys-save" class="primary">Save keys</button>
       <button id="keys-clear" class="danger">Clear</button>
     </div>
     <div class="sym" style="margin-top:8px;font-size:11.5px">Stored locally in git-ignored <code>config/secrets.yaml</code>,
-      never shown again and never written to config.yaml. Required only for <b>real-orders</b> live trading.</div>
-  </div>
-
-  <div class="card wide">
-    <div class="row" style="flex-wrap:wrap">
-      <h2 style="margin:0">Training</h2><div class="spacer"></div>
-      <span class="sym">Target symbol</span>
-      <input type="text" id="job-symbol" placeholder="config default" style="width:130px">
-      <span id="train-state" class="sym">idle</span>
-      <button id="train-btn" class="primary">Train now</button>
-    </div>
-    <div class="sym" style="margin-bottom:8px;font-size:11.5px">Leave the target blank to use the configured symbol.
-      Each coin gets its own model (<code>models/model_&lt;SYMBOL&gt;.pkl</code>); switch by setting <code>exchange.symbol</code>.
-      The same target applies to the validation jobs below.</div>
-    <div id="model-status" class="sym" style="margin-bottom:10px">Model: …</div>
-    <div id="train-log">Train output will appear here…</div>
-  </div>
-
-  <div class="card wide">
-    <div class="row">
-      <h2 style="margin:0">Validation (out-of-sample)</h2><div class="spacer"></div>
-      <span class="sym">days</span><input type="number" id="val-days" placeholder="config" style="width:90px">
-      <span id="wf-state" class="sym">idle</span>
-      <button id="wf-btn" class="primary">Run walk-forward</button>
-      <button id="ho-btn" class="primary">Run holdout</button>
-    </div>
-    <div id="val-log">Walk-forward / holdout output will appear here…</div>
+      never shown again and never written to config.yaml. Create an exchange key with <b>spot trading but NOT withdrawals</b>.</div>
   </div>
 </main>
 
