@@ -69,12 +69,14 @@ class EngineController:
                 self.settings.mode = RunMode.LIVE
                 # paper = live data + simulated fills; live = REAL orders/money.
                 environment = "live" if real_orders else "paper"
+                warmup_bars = await self._fetch_warmup(feature_engine)
             else:
                 ohlcv = self._simulation_ohlcv()
                 data_handler = ReplayDataHandler(ohlcv, delay=0.01)
                 execution = PaperExecutionHandler(self.settings.execution)
                 self.settings.mode = RunMode.BACKTEST
                 environment = "simulation"
+                warmup_bars = []
 
             # Persistence is best-effort: if the DB can't be opened (e.g. a
             # read-only or network filesystem that rejects SQLite WAL), the
@@ -104,9 +106,43 @@ class EngineController:
                 state=self.state,
                 broadcaster=self.broadcaster,
                 store=self._store,
+                warmup_bars=warmup_bars,
             )
             self._task = asyncio.create_task(self._run_guarded())
             logger.info("Engine started in %s mode", mode)
+
+    async def _fetch_warmup(self, feature_engine) -> list:
+        """Fetch recent closed candles to prime the feature engine for live trading.
+
+        Uses a throwaway feed (closed immediately) so it never collides with the live
+        stream's client. Best-effort: on any failure the engine just starts cold.
+        """
+        from datetime import datetime, timedelta, timezone
+
+        from cryptotrader.data.ingestion import HistoricalDataHandler
+
+        need = getattr(feature_engine, "warmup", 120) + 10
+        feed = MarketDataFeed(
+            exchange_id=self.settings.exchange.id,
+            symbol=self.settings.exchange.symbol,
+            timeframe=self.settings.exchange.timeframe,
+            cache_dir=None,
+            api_key=self.settings.exchange.api_key,
+            api_secret=self.settings.exchange.api_secret,
+        )
+        try:
+            start = datetime.now(tz=timezone.utc) - timedelta(
+                milliseconds=feed._tf_ms * (need + 5)
+            )
+            hist = await feed.fetch_history(start, use_cache=False)
+            if hist.empty:
+                return []
+            return HistoricalDataHandler(hist).bars[-need:]
+        except Exception:
+            logger.exception("Live warmup history unavailable; starting cold.")
+            return []
+        finally:
+            await feed.close()
 
     async def _run_guarded(self) -> None:
         try:

@@ -220,11 +220,15 @@ function renderTrades(rows){const tb=$("trades");
     <td class="${sign(t.net_pnl)}">$${fmt(t.net_pnl,2)}</td><td>${fmt(t.efficiency_ratio*100,1)}%</td>
     <td class="reason">${t.exit_reason}</td><td class="reason">${(t.exit_time||"").slice(11,19)}</td></tr>`).join("");}
 let viewingRun=null;        // null = live; otherwise a past run id is shown (frozen)
-let prevStatus=null;
+let prevStatus=null, liveN=-1;
 function render(s){
   // When the user is browsing a past run, don't let live ticks overwrite the view.
   if(s.status!=="running"&&prevStatus==="running") loadRuns();  // a run just ended -> refresh picker
-  prevStatus=s.status;
+  // Live-refresh the Trades & Analytics tab while it's open (new trades / run start-stop).
+  if(!$("view-trades").classList.contains("hidden") && (s.n_trades!==liveN || s.status!==prevStatus)){
+    liveN=s.n_trades; refreshRunSelectors(); loadTrades();
+  }
+  liveN=s.n_trades; prevStatus=s.status;
   if(viewingRun!==null) return;
   $("sym").textContent=s.symbol||"—";
   const envtxt=s.environment==="live"?"⚠ REAL MONEY":(s.environment||s.mode);
@@ -444,6 +448,7 @@ function pollJob(kind,loop){fetch(`/api/job/status?kind=${kind}`).then(r=>r.json
 
 /* ---------- Trades & Analytics ---------- */
 let TRADES=[];                       // normalised rows for the current source
+let T_VIEW=[];                       // current filtered+sorted rows (what the table shows)
 let tSort={k:"exit_time",dir:-1};    // default: newest exits first
 const tChart=new Chart($("t-chart"),{type:"line",data:{labels:[],datasets:[{data:[],
   borderColor:"#16c784",backgroundColor:"rgba(22,199,132,.12)",fill:true,tension:.1,pointRadius:0,borderWidth:2}]},
@@ -492,9 +497,11 @@ async function loadTrades(){
       fetch(`/api/trades?${qs}&limit=20000`).then(r=>r.json()),
       fetch(`/api/stats?${qs}`).then(r=>r.json())]);
     TRADES=(tr||[]).map(normTrade);
-    // populate exit-reason filter from data
+    // populate exit-reason filter from data, preserving the current selection
+    const keepReason=$("f-reason").value;
     const reasons=[...new Set(TRADES.map(t=>t.exit_reason).filter(Boolean))];
     $("f-reason").innerHTML=`<option value="">All exits</option>`+reasons.map(r=>`<option value="${r}">${r}</option>`).join("");
+    if([...$("f-reason").options].some(o=>o.value===keepReason)) $("f-reason").value=keepReason;
     renderStats(st); applyTradeFilters();
   }catch(e){$("t-rows").innerHTML=`<tr><td colspan="12" class="flat">Could not load trades.</td></tr>`;}
 }
@@ -515,7 +522,8 @@ function applyTradeFilters(){
   rows.sort((a,b)=>{const x=a[k],y=b[k];
     if(x==null)return 1; if(y==null)return -1;
     return (typeof x==="number"?x-y:String(x).localeCompare(String(y)))*d;});
-  const showRun=($("t-run").value==="all");
+  const showRun=(($("t-run").value||"all")==="all");
+  T_VIEW=rows;
   $("t-count").textContent=`${rows.length} / ${TRADES.length} trades`;
   $("t-rows").innerHTML=rows.length?rows.map(t=>`<tr>
     <td>${showRun?("#"+(t.run_id??"")):"—"}</td>
@@ -536,7 +544,8 @@ document.querySelectorAll("#t-table th").forEach(th=>th.onclick=()=>{
   const k=th.dataset.k; tSort=(tSort.k===k)?{k,dir:-tSort.dir}:{k,dir:1}; applyTradeFilters();});
 $("t-csv").onclick=()=>{
   const cols=["run_id","entry_time","exit_time","sideName","quantity","entry_price","exit_price","gross_pnl","fees","net_pnl","efficiency_ratio","hold","exit_reason"];
-  const lines=[cols.join(",")].concat(TRADES.map(t=>cols.map(c=>t[c]??"").join(",")));
+  const src=T_VIEW.length?T_VIEW:TRADES;   // export exactly what is shown (filtered+sorted)
+  const lines=[cols.join(",")].concat(src.map(t=>cols.map(c=>t[c]??"").join(",")));
   const blob=new Blob([lines.join("\n")],{type:"text/csv"});
   const a=document.createElement("a"); a.href=URL.createObjectURL(blob); a.download="trades.csv"; a.click();};
 

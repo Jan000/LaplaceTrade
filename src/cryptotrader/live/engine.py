@@ -65,9 +65,14 @@ class LiveTradingEngine:
         state: EngineState,
         broadcaster: StateBroadcaster | None = None,
         store: TradeStore | None = None,
+        warmup_bars: list[Bar] | None = None,
     ) -> None:
         self._data = data_handler
         self._features = feature_engine
+        # Recent history used to prime the feature engine so the strategy can predict
+        # on the first live candle instead of after `warmup`×timeframe of dead air.
+        self._warmup_bars = warmup_bars or []
+        self._last_ts = None
         self._strategy = strategy
         self._risk = risk_manager
         self._exec = execution_handler
@@ -91,10 +96,21 @@ class LiveTradingEngine:
         """Consume the live stream until cancelled or :meth:`stop` is called."""
         await self._init_state()
         self._state.status = "running"
+        self._prime()
+        self._publish()  # show price/equity immediately, before the first live candle
         try:
+            # Act on the most recent CLOSED candle right away (the current signal),
+            # then follow the live stream — de-duplicating by timestamp so the stream
+            # re-emitting that same bar doesn't double-trade it.
+            if self._warmup_bars and not self._stop:
+                await self._on_bar(MarketEvent(self._warmup_bars[-1]))
+                self._last_ts = self._warmup_bars[-1].timestamp
             async for event in self._data.stream():
                 if self._stop:
                     break
+                if self._last_ts is not None and event.bar.timestamp <= self._last_ts:
+                    continue
+                self._last_ts = event.bar.timestamp
                 await self._on_bar(event)
         except Exception:  # pragma: no cover - defensive in live loop
             self._state.status = "error"
@@ -127,6 +143,24 @@ class LiveTradingEngine:
                 config=self._settings.model_dump(mode="json"),
                 environment=self._state.environment,
             )
+
+    def _prime(self) -> None:
+        """Warm the feature engine from recent history — no trading, just buffer fill.
+
+        Feeds all but the most recent closed bar into the feature engine so that the
+        immediate decision on the latest bar (and the first live bar) has a full
+        backward window. Also seeds the displayed price/equity so the dashboard shows
+        activity the instant the engine starts.
+        """
+        if not self._warmup_bars:
+            return
+        for bar in self._warmup_bars[:-1]:
+            self._features.update(bar)
+        last = self._warmup_bars[-1]
+        self._latest_atr = self._current_atr()
+        self._state.last_price = last.close
+        self._state.equity = self._portfolio.equity(last.close)
+        logger.info("Primed feature engine with %d warmup bars", len(self._warmup_bars))
 
     async def _on_bar(self, event: MarketEvent) -> None:
         bar = event.bar
