@@ -279,7 +279,7 @@ class TradeStore:
         async with self._conn.execute(
             "SELECT symbol, COUNT(*) AS n_trades, "
             "SUM(CASE WHEN net_pnl > 0 THEN 1 ELSE 0 END) AS wins, "
-            "SUM(net_pnl) AS net_pnl, "
+            "SUM(net_pnl) AS net_pnl, AVG(efficiency_ratio) AS avg_efficiency, "
             "SUM(CASE WHEN net_pnl > 0 THEN net_pnl ELSE 0 END) AS gross_win, "
             "SUM(CASE WHEN net_pnl < 0 THEN -net_pnl ELSE 0 END) AS gross_loss "
             "FROM trades GROUP BY symbol"

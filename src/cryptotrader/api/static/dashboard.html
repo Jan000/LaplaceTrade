@@ -102,9 +102,14 @@
       <select id="run-select"><option value="">Live / current</option></select>
     </div>
     <canvas id="chart" height="90"></canvas></div>
+  <div class="card wide" id="per-symbol-card" style="display:none"><h2>Per-symbol</h2>
+    <div class="tbl-wrap"><table>
+      <thead><tr><th>Symbol</th><th>Status</th><th>Equity</th><th>Return</th><th>Trades</th>
+        <th>Win%</th><th>Eff</th><th>Position</th><th>Last price</th></tr></thead>
+      <tbody id="per-symbol-rows"></tbody></table></div></div>
   <div class="card wide"><h2>Recent Trades</h2><div class="tbl-wrap"><table>
-    <thead><tr><th>Side</th><th>Entry</th><th>Exit</th><th>Net PnL</th><th>Efficiency</th><th>Reason</th><th>Exit</th></tr></thead>
-    <tbody id="trades"><tr><td colspan="7" class="flat">No trades yet.</td></tr></tbody></table></div></div>
+    <thead><tr><th>Symbol</th><th>Side</th><th>Entry</th><th>Exit</th><th>Net PnL</th><th>Efficiency</th><th>Reason</th><th>Exit</th></tr></thead>
+    <tbody id="trades"><tr><td colspan="8" class="flat">No trades yet.</td></tr></tbody></table></div></div>
 </main>
 
 <!-- ============ SYMBOLS ============ -->
@@ -116,16 +121,19 @@
       <button id="sym-add-btn" class="ghost">Add</button>
       <button id="sym-reload" class="ghost">Reload</button>
     </div>
-    <div class="tbl-wrap" style="max-height:520px">
+    <div class="tbl-wrap" style="max-height:540px">
       <table>
-        <thead><tr><th>Symbol</th><th>Status</th><th>Model</th><th>Trained</th><th>Trades</th>
-          <th>Win%</th><th>PF</th><th>Net PnL</th><th>Actions</th></tr></thead>
-        <tbody id="sym-rows"><tr><td colspan="9" class="flat">Loading…</td></tr></tbody>
+        <thead><tr><th>Symbol</th><th>Trade</th><th>Status</th><th>Model</th><th>Trained</th>
+          <th>Trades</th><th>Win%</th><th>PF</th><th>Eff</th><th>Net PnL</th>
+          <th>Walk-fwd</th><th>Holdout</th><th>Actions</th></tr></thead>
+        <tbody id="sym-rows"><tr><td colspan="13" class="flat">Loading…</td></tr></tbody>
       </table>
     </div>
-    <div class="sym" style="margin-top:8px;font-size:11.5px"><b>Set active</b> switches the traded symbol
-      (saved to config). <b>Train / WF / HO</b> run for that symbol and open the live log in
-      Settings &amp; Training. Stats are realized trades from past runs (all environments).</div>
+    <div class="sym" style="margin-top:8px;font-size:11.5px">
+      <b>Trade</b> = include in concurrent live/sim trading (equity split across ticked symbols).
+      <b>Set active</b> sets the primary symbol. <b>Train / WF / HO</b> run for that symbol and open the log in
+      Settings. <b>Walk-fwd / Holdout</b> show the last out-of-sample result; <b>Eff</b> = avg efficiency; other
+      stats are realized trades from past runs.</div>
   </div>
 </main>
 
@@ -261,15 +269,27 @@ const chart=new Chart($("chart"),{type:"line",data:{labels:[],datasets:[{data:[]
   backgroundColor:"rgba(59,130,246,.12)",fill:true,tension:.15,pointRadius:0,borderWidth:2}]},
   options:{responsive:true,animation:false,plugins:{legend:{display:false}},
   scales:{x:{display:false},y:{ticks:{color:"#8a97a8"},grid:{color:"#1b2230"}}}}});
-const EMPTY_TRADES=`<tr><td colspan="7" class="flat">No trades yet.</td></tr>`;
+const EMPTY_TRADES=`<tr><td colspan="8" class="flat">No trades yet.</td></tr>`;
 function renderEquity(curve){chart.data.labels=(curve||[]).map(p=>p.t);
   chart.data.datasets[0].data=(curve||[]).map(p=>p.equity); chart.update("none");}
 function renderTrades(rows){const tb=$("trades");
   if(!rows||!rows.length){tb.innerHTML=EMPTY_TRADES;return;}
   tb.innerHTML=rows.map(t=>`<tr>
+    <td class="reason">${t.symbol||""}</td>
     <td><span class="pill ${t.side}">${t.side}</span></td><td>$${fmt(t.entry_price)}</td><td>$${fmt(t.exit_price)}</td>
     <td class="${sign(t.net_pnl)}">$${fmt(t.net_pnl,2)}</td><td>${fmt(t.efficiency_ratio*100,1)}%</td>
     <td class="reason">${t.exit_reason}</td><td class="reason">${(t.exit_time||"").slice(11,19)}</td></tr>`).join("");}
+function renderPerSymbol(symbols){
+  const card=$("per-symbol-card");
+  if(!symbols||symbols.length<2){card.style.display="none";return;}
+  card.style.display="";
+  $("per-symbol-rows").innerHTML=symbols.map(s=>{
+    const pos=s.position?`<span class="pill ${s.position.side}">${s.position.side}</span> ${fmt(s.position.quantity,4)}`:"Flat";
+    return `<tr><td><b>${s.symbol}</b></td><td class="reason">${s.status}</td><td>$${fmt(s.equity)}</td>
+      <td class="${sign(s.total_return_pct)}">${fmt(s.total_return_pct,2)}%</td><td>${s.n_trades}</td>
+      <td>${fmt((s.win_rate||0)*100,1)}%</td><td>${fmt((s.avg_efficiency_ratio||0)*100,1)}%</td>
+      <td>${pos}</td><td class="reason">$${fmt(s.last_price)}</td></tr>`;}).join("");
+}
 let viewingRun=null;        // null = live; otherwise a past run id is shown (frozen)
 let prevStatus=null, liveN=-1;
 function render(s){
@@ -297,6 +317,7 @@ function render(s){
   else if(s.status==="running") renderEquity([]);
   if(s.recent_trades&&s.recent_trades.length) renderTrades(s.recent_trades);
   else if(s.status==="running") renderTrades([]);
+  renderPerSymbol(s.symbols);
 }
 /* Seed the monitor from persisted history (so a page refresh isn't blank). */
 async function loadHistory(){
@@ -316,7 +337,7 @@ function syncModeUI(){const live=$("mode").value==="live";
   $("real-wrap").classList.toggle("hidden",!live);
   $("model-badge").classList.toggle("hidden",!live);
   if(!live)$("real-orders").checked=false;
-  loadModel();}   // refresh badge + real-orders gating for the current config
+  refreshGate();}   // refresh badge + real-orders gating over the traded symbol set
 $("mode").onchange=syncModeUI;
 function setRunning(r){$("start").disabled=r;$("stop").disabled=!r;$("mode").disabled=r;
   $("real-orders").disabled = r || !realOrdersAllowed();}
@@ -457,45 +478,45 @@ $("cfg-save").onclick=async()=>{$("cfg-msg").textContent="saving…";
   const r=await fetch("/api/config",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(collectConfig())});
   const b=await r.json();
   $("cfg-msg").textContent=r.ok?"saved ✓ — retrain to apply feature/model changes":("error: "+(b.error||""));
-  if(r.ok) loadModel(); };   // symbol/timeframe may have changed -> refresh model match + gating
+  if(r.ok){loadModel(); refreshGate();} };   // symbol/timeframe may have changed
 
-/* ---------- model status ---------- */
+/* ---------- model status + real-orders gate ---------- */
 let MODELINFO=null;
+let GATE={real_ok:false,trade_count:1,trade_symbols:[]};
 function jobSymbolArgs(){const s=$("job-symbol").value.trim(); return s?["--symbol",s]:[];}
-function realOrdersAllowed(){return !!(MODELINFO&&MODELINFO.real_ok);}
-function updateModelBadge(m){
-  const badge=$("model-badge"); const live=$("mode").value==="live";
-  badge.classList.toggle("hidden",!live);
-  if(!m){badge.textContent="";}
-  else if(!m.exists){badge.textContent=`⚠ no model for ${m.configured_symbol}`; badge.style.color="var(--amber)";}
-  else if(!m.matches){badge.textContent=`⚠ model ${m.model_symbol}/${m.model_timeframe} ≠ ${m.configured_symbol}/${m.configured_timeframe}`; badge.style.color="var(--red)";}
-  else{badge.textContent=`model ${m.model_symbol}/${m.model_timeframe} ✓`; badge.style.color="var(--green)";}
-  // Gate the real-orders toggle to the guardrail (never allow real money on a wrong/no model).
-  if(!realOrdersAllowed()){
+function realOrdersAllowed(){return !!GATE.real_ok;}
+function updateGateBadge(){
+  const live=$("mode").value==="live"; const b=$("model-badge");
+  b.classList.toggle("hidden",!live);
+  const n=GATE.trade_count||1;
+  const label=GATE.trade_symbols.length>1?`${n} symbols`:(GATE.trade_symbols[0]||(MODELINFO&&MODELINFO.configured_symbol)||"");
+  if(GATE.real_ok){b.textContent=`${label} · real ✓`; b.style.color="var(--green)";
+    $("real-wrap").title="Real orders allowed (a traded symbol has a matching model). Needs API keys.";}
+  else{b.textContent=`${label} · real blocked`; b.style.color="var(--amber)";
     $("real-orders").checked=false;
-    $("real-wrap").title=(m&&m.exists)
-      ? `Real orders blocked: model is for ${m.model_symbol}/${m.model_timeframe}, not ${m.configured_symbol}/${m.configured_timeframe}.`
-      : `Real orders blocked: no trained model for ${m?m.configured_symbol:"this symbol"}. Train & validate first.`;
-  }else{
-    $("real-wrap").title="Place REAL orders on the exchange (requires API keys).";
-  }
-  $("real-orders").disabled = $("start").disabled || !realOrdersAllowed();
+    $("real-wrap").title="Real orders blocked: no traded symbol has a matching trained model. Train & validate first.";}
+  $("real-orders").disabled = $("start").disabled || !GATE.real_ok;
 }
-async function loadModel(){
+async function refreshGate(){
+  try{const d=await fetch("/api/symbols").then(r=>r.json());
+    GATE={real_ok:!!d.real_ok,trade_count:d.trade_count||1,trade_symbols:d.trade_symbols||[]};
+  }catch(e){GATE={real_ok:false,trade_count:1,trade_symbols:[]};}
+  updateGateBadge();
+}
+async function loadModel(){   // detailed status of the CONFIGURED symbol, shown in Settings
   try{const m=await fetch("/api/model").then(r=>r.json()); MODELINFO=m;
     const when=m.trained_at?new Date(m.trained_at).toLocaleString():"?";
     const pool=(m.train_symbols&&m.train_symbols.length)?` · pooled: ${m.train_symbols.join(", ")}`:"";
     if(!m.exists){
-      $("model-status").innerHTML=`Active model: <b style="color:var(--amber)">momentum baseline</b> — no model for ${m.configured_symbol}. Train one (real orders are blocked until you do).`;
+      $("model-status").innerHTML=`Active model (${m.configured_symbol}): <b style="color:var(--amber)">momentum baseline</b> — no model. Train one (real orders are blocked until you do).`;
     }else if(!m.matches){
       $("model-status").innerHTML=`<b style="color:var(--red)">⚠ Model mismatch</b> — loaded model is for `+
         `<b>${m.model_symbol||"?"}/${m.model_timeframe||"?"}</b> but config is <b>${m.configured_symbol}/${m.configured_timeframe}</b>. `+
-        `Real orders are BLOCKED. Train a model for ${m.configured_symbol} (${m.configured_timeframe}).`;
+        `Train a model for ${m.configured_symbol} (${m.configured_timeframe}).`;
     }else{
       $("model-status").innerHTML=`Active model: <b style="color:var(--green)">${m.model_symbol||m.configured_symbol} / ${m.model_timeframe||m.configured_timeframe}</b> `+
         `(${m.model_path}, trained ${when})${pool}`;
     }
-    updateModelBadge(m);
   }catch(e){$("model-status").textContent="Model: (status unavailable)";}
 }
 
@@ -510,7 +531,7 @@ function pollTrain(loop){fetch("/api/train/status").then(r=>r.json()).then(s=>{
   $("train-state").textContent=s.status; $("train-log").textContent=s.log||"(no output yet)";
   $("train-log").scrollTop=$("train-log").scrollHeight; $("train-btn").disabled=s.running;
   if(loop){clearInterval(trainTimer); trainTimer=setInterval(()=>pollTrain(false),2000);}
-  if(!s.running){clearInterval(trainTimer); trainTimer=null; loadModel();}  /* stop polling + refresh model when done */
+  if(!s.running){clearInterval(trainTimer); trainTimer=null; loadModel(); refreshGate();}  /* refresh model + gate when done */
 }).catch(()=>{clearInterval(trainTimer);trainTimer=null;});}
 
 /* ---------- run history browser ---------- */
@@ -555,6 +576,7 @@ function renderHistorical(run,trades){
   const effs=trades.map(t=>t.efficiency_ratio).filter(x=>x!=null);
   $("eff").textContent=fmt(effs.length?effs.reduce((a,b)=>a+b,0)/effs.length*100:0,1)+"%";
   $("pos").innerHTML="Flat";
+  $("per-symbol-card").style.display="none";
 }
 function normTrades(rows){return rows.map(t=>({
   side:t.side===1?"LONG":(t.side===-1?"SHORT":t.side),
@@ -717,39 +739,61 @@ $("t-csv").onclick=()=>{
 
 /* ---------- Symbols table ---------- */
 let SYMBOL_ADDED=[];
+let TRADE_SET=[];
+function valdot(v){if(!v)return `<span class="reason">—</span>`;
+  const ret=v.compounded_return_pct!=null?v.compounded_return_pct:v.return_pct;
+  const robust=v.robust!=null?v.robust:(ret>0);
+  const col=ret>0?'var(--green)':(ret<0?'var(--red)':'var(--muted)');
+  const extra=v.verdict?` (${v.positive_folds}/${v.splits})`:"";
+  return `<span style="color:${col}" title="${v.verdict||''}">${ret>=0?'+':''}${fmt(ret,1)}%${extra}</span>`;}
 async function loadSymbols(){
   try{
     const d=await fetch("/api/symbols").then(r=>r.json());
+    TRADE_SET=d.trade_symbols||[];
     const rows=(d.symbols||[]).slice();
     for(const a of SYMBOL_ADDED){if(!rows.some(r=>r.symbol===a))
-      rows.push({symbol:a,active:a===d.configured,has_model:false,n_trades:0,win_rate:0,net_pnl:0,profit_factor:0});}
+      rows.push({symbol:a,active:a===d.configured,trade:TRADE_SET.includes(a),has_model:false,n_trades:0,win_rate:0,net_pnl:0,profit_factor:0});}
     $("sym-rows").innerHTML = rows.length ? rows.map(r=>{
       const model=r.has_model
-        ? `<span style="color:${r.matches?'var(--green)':'var(--amber)'}">✓ ${r.model_timeframe||''}${r.matches?'':' (tf≠)'}</span>`
+        ? `<span style="color:${r.matches?'var(--green)':'var(--amber)'}" title="trained ${r.train_symbols?('· pooled '+r.train_symbols.join(',')):''}">✓ ${r.model_timeframe||''}${r.matches?'':' (tf≠)'}</span>`
         : `<span class="reason">—</span>`;
       const when=r.trained_at?new Date(r.trained_at).toLocaleDateString():"—";
       const pfv=r.profit_factor==null?"∞":fmt(r.profit_factor,2);
+      const eff=r.avg_efficiency==null?"—":fmt(r.avg_efficiency*100,1)+"%";
       const act=r.active?`<span class="pill LONG">active</span>`:"";
       return `<tr>
-        <td><b>${r.symbol}</b></td><td>${act}</td><td>${model}</td><td class="reason">${when}</td>
-        <td>${r.n_trades}</td><td>${fmt((r.win_rate||0)*100,1)}%</td><td>${pfv}</td>
+        <td><b>${r.symbol}</b></td>
+        <td><input type="checkbox" data-trade="${r.symbol}" ${r.trade?'checked':''}></td>
+        <td>${act}</td><td>${model}</td><td class="reason">${when}</td>
+        <td>${r.n_trades}</td><td>${fmt((r.win_rate||0)*100,1)}%</td><td>${pfv}</td><td>${eff}</td>
         <td class="${sign(r.net_pnl)}">$${fmt(r.net_pnl,2)}</td>
-        <td>
+        <td>${valdot(r.walkforward)}</td><td>${valdot(r.holdout)}</td>
+        <td style="white-space:nowrap">
           <button class="ghost btn-xs" data-act="active" data-sym="${r.symbol}" ${r.active?'disabled':''}>Set active</button>
           <button class="primary btn-xs" data-act="train" data-sym="${r.symbol}">Train</button>
           <button class="ghost btn-xs" data-act="walkforward" data-sym="${r.symbol}">WF</button>
           <button class="ghost btn-xs" data-act="holdout" data-sym="${r.symbol}">HO</button>
         </td></tr>`;
-    }).join("") : `<tr><td colspan="9" class="flat">No symbols.</td></tr>`;
+    }).join("") : `<tr><td colspan="13" class="flat">No symbols.</td></tr>`;
     $("sym-rows").querySelectorAll("button[data-act]").forEach(b=>
       b.onclick=()=>symAction(b.dataset.act,b.dataset.sym));
-  }catch(e){$("sym-rows").innerHTML=`<tr><td colspan="9" class="flat">Could not load symbols.</td></tr>`;}
+    $("sym-rows").querySelectorAll("input[data-trade]").forEach(c=>
+      c.onchange=()=>toggleTrade(c.dataset.trade,c.checked));
+  }catch(e){$("sym-rows").innerHTML=`<tr><td colspan="13" class="flat">Could not load symbols.</td></tr>`;}
+}
+async function toggleTrade(sym,on){
+  const set=new Set(TRADE_SET);
+  if(on)set.add(sym); else set.delete(sym);
+  TRADE_SET=[...set];
+  await fetch("/api/config",{method:"POST",headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({data:{trade_symbols:TRADE_SET}})});
+  refreshGate();
 }
 async function symAction(act,sym){
   if(act==="active"){
     await fetch("/api/config",{method:"POST",headers:{"Content-Type":"application/json"},
       body:JSON.stringify({exchange:{symbol:sym}})});
-    await loadSymbols(); loadModel(); return;
+    await loadSymbols(); loadModel(); refreshGate(); return;
   }
   $("job-symbol").value=sym;
   await fetch("/api/job",{method:"POST",headers:{"Content-Type":"application/json"},

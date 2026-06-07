@@ -103,6 +103,20 @@ def main() -> None:
         pf_s = "inf" if pf == float("inf") else f"{pf:.2f}"
         print(f"{s:<12}{role:<14}{len(test):>7}{rep['total_return_pct']:>10.1f}{pf_s:>7}"
               f"{rep['n_trades']:>8}{rep['win_rate'] * 100:>6.1f}{rep['max_drawdown_pct']:>8.1f}")
+        if s == primary:  # persist the (out-of-time) result for the dashboard
+            try:
+                from cryptotrader.ml.registry import write_validation
+
+                write_validation("holdout", primary, {
+                    "timeframe": settings.exchange.timeframe,
+                    "return_pct": round(rep["total_return_pct"], 2),
+                    "profit_factor": None if pf == float("inf") else round(pf, 3),
+                    "win_rate": round(rep["win_rate"], 4),
+                    "n_trades": rep["n_trades"],
+                    "max_drawdown_pct": round(rep["max_drawdown_pct"], 2),
+                })
+            except Exception:
+                pass
     print("\nUNSEEN-asset rows are a strict out-of-sample check: those coins were never "
           "in training. A positive edge there means the signal generalises.")
 

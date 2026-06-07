@@ -66,7 +66,11 @@ class LiveTradingEngine:
         broadcaster: StateBroadcaster | None = None,
         store: TradeStore | None = None,
         warmup_bars: list[Bar] | None = None,
+        on_update=None,
     ) -> None:
+        # When set, called on every state change instead of the broadcaster — lets a
+        # controller aggregate several concurrent engines into one dashboard snapshot.
+        self._on_update = on_update
         self._data = data_handler
         self._features = feature_engine
         # Recent history used to prime the feature engine so the strategy can predict
@@ -319,5 +323,7 @@ class LiveTradingEngine:
         ]
 
     def _publish(self) -> None:
-        if self._broadcaster is not None:
+        if self._on_update is not None:
+            self._on_update()
+        elif self._broadcaster is not None:
             self._broadcaster.publish(self._state.snapshot())

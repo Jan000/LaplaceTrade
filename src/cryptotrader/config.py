@@ -58,6 +58,9 @@ class DataConfig(BaseModel):
     # what gets traded/tested). More + more diverse data fights overfitting on the small
     # higher-timeframe history. Empty list = single-symbol behaviour.
     train_symbols: list[str] = Field(default_factory=list)
+    # Symbols to TRADE concurrently in live/simulation. Empty = just exchange.symbol.
+    # Account equity is split equally across them; each needs its own trained model.
+    trade_symbols: list[str] = Field(default_factory=list)
 
 
 class FeatureConfig(BaseModel):

@@ -41,7 +41,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.get("/api/state")
     async def get_state() -> JSONResponse:
-        return JSONResponse(controller.state.snapshot())
+        return JSONResponse(controller.snapshot())
 
     _COMMON_SYMBOLS = ["BTC/USDT", "ETH/USDT", "SOL/USDT", "BNB/USDT",
                        "XRP/USDT", "ADA/USDT", "DOGE/USDT", "LTC/USDT"]
@@ -49,9 +49,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.get("/api/symbols")
     async def symbols() -> JSONResponse:
         """Per-symbol model status + realized trade stats + active flag (Symbols table)."""
-        from cryptotrader.ml.registry import list_models, model_path_for, read_meta
+        from cryptotrader.ml.registry import (
+            list_models, model_path_for, read_meta, read_validation,
+        )
 
         s = app.state.settings
+        trade_set = set(s.data.trade_symbols or [])
         # DB trade stats per symbol.
         summaries = await _read_store_all(app.state.settings, lambda st: st.symbol_summaries())
         stats = {r["symbol"]: r for r in summaries}
@@ -59,7 +62,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         models = {m["symbol"]: m for m in list_models() if m.get("symbol")}
 
         names = list(dict.fromkeys(
-            [*_COMMON_SYMBOLS, *models.keys(), *stats.keys(), s.exchange.symbol]))
+            [*_COMMON_SYMBOLS, *models.keys(), *stats.keys(),
+             *trade_set, s.exchange.symbol]))
         out = []
         for sym in names:
             meta = (models.get(sym) or {}).get("meta")
@@ -71,19 +75,29 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             out.append({
                 "symbol": sym,
                 "active": sym == s.exchange.symbol,
+                "trade": sym in trade_set,
                 "has_model": meta is not None,
                 "model_timeframe": (meta or {}).get("timeframe"),
                 "trained_at": (meta or {}).get("saved_at"),
                 "train_symbols": (meta or {}).get("train_symbols"),
+                "n_train_rows": (meta or {}).get("n_train_rows"),
                 "matches": bool(meta and meta.get("symbol") == sym
                                 and meta.get("timeframe") == s.exchange.timeframe),
                 "n_trades": n,
                 "win_rate": round((st.get("wins") or 0) / n, 4) if n else 0.0,
                 "net_pnl": round(float(st.get("net_pnl") or 0.0), 2),
+                "avg_efficiency": round(float(st["avg_efficiency"]), 4)
+                                  if st.get("avg_efficiency") is not None else None,
                 "profit_factor": round(gw / gl, 3) if gl > 0 else (None if gw > 0 else 0.0),
+                "walkforward": read_validation("walkforward", sym),
+                "holdout": read_validation("holdout", sym),
             })
+        active_set = trade_set or {s.exchange.symbol}
+        real_ok = any(r["matches"] for r in out if r["symbol"] in active_set)
         return JSONResponse({"symbols": out, "configured": s.exchange.symbol,
-                             "configured_timeframe": s.exchange.timeframe})
+                             "configured_timeframe": s.exchange.timeframe,
+                             "trade_symbols": sorted(trade_set),
+                             "trade_count": len(active_set), "real_ok": real_ok})
 
     @app.get("/api/model")
     async def model_info() -> JSONResponse:

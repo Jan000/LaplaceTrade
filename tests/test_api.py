@@ -76,6 +76,25 @@ def test_runs_keys_and_jobs(tmp_path, monkeypatch) -> None:
         assert client.post("/api/job", json={"kind": "bogus"}).status_code == 400
 
 
+def test_controller_aggregate_snapshot() -> None:
+    """The controller merges per-symbol engine states into one aggregate snapshot."""
+    from cryptotrader.api.controller import EngineController
+    from cryptotrader.live.state import EngineState
+
+    c = EngineController(Settings())
+    a = EngineState(symbol="BTC/USDT")
+    a.initial_equity, a.equity, a.n_trades, a.win_rate, a.status = 5000, 5500, 4, 0.5, "running"
+    b = EngineState(symbol="ETH/USDT")
+    b.initial_equity, b.equity, b.n_trades, b.win_rate, b.status = 5000, 4800, 2, 0.0, "running"
+    c._states = {"BTC/USDT": a, "ETH/USDT": b}
+
+    snap = c.snapshot()
+    assert snap["equity"] == 10300 and snap["initial_equity"] == 10000
+    assert snap["n_trades"] == 6 and snap["status"] == "running"
+    assert snap["position"] is None  # multi-symbol -> per-symbol breakdown instead
+    assert {s["symbol"] for s in snap["symbols"]} == {"BTC/USDT", "ETH/USDT"}
+
+
 def test_symbols_table(tmp_path, monkeypatch) -> None:
     import cryptotrader.ml.registry as registry
 

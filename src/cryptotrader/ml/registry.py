@@ -38,6 +38,29 @@ def meta_path_for(model_path: str | Path) -> Path:
     return p.with_name(p.name + ".meta.json")  # model_BTCUSDT.pkl.meta.json
 
 
+def validation_path_for(kind: str, symbol: str, base: Path | str | None = None) -> Path:
+    """Path for a persisted validation result, e.g. models/walkforward_BTCUSDT.json."""
+    return Path(base or MODELS_DIR) / f"{kind}_{safe_symbol(symbol)}.json"
+
+
+def write_validation(kind: str, symbol: str, result: dict) -> None:
+    p = validation_path_for(kind, symbol)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    payload = {**result, "symbol": symbol, "kind": kind,
+               "saved_at": datetime.now(tz=timezone.utc).isoformat()}
+    p.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+
+
+def read_validation(kind: str, symbol: str) -> dict | None:
+    p = validation_path_for(kind, symbol)
+    if not p.exists():
+        return None
+    try:
+        return json.loads(p.read_text(encoding="utf-8"))
+    except Exception:  # pragma: no cover
+        return None
+
+
 def write_meta(model_path: str | Path, meta: dict) -> None:
     payload = {**meta, "saved_at": datetime.now(tz=timezone.utc).isoformat()}
     meta_path_for(model_path).write_text(json.dumps(payload, indent=2), encoding="utf-8")
