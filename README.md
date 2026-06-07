@@ -45,6 +45,13 @@ real time over a WebSocket. A **View** selector browses any past run from the
 database (equity, trades and a frozen summary); on a page refresh it seeds from the
 last persisted run so the panel is never blank.
 
+**Symbols tab** — a table of every symbol with its model status, last walk-forward /
+holdout result, average efficiency and realized trade stats, plus per-row controls
+(**Train / Walk-fwd / Holdout / Set active**). Tick **Trade** on several symbols to trade
+them **concurrently**: the engine runs one model per symbol at once and splits account
+equity equally across them (real orders are still gated per symbol by the model guardrail).
+The Monitor then shows aggregate totals plus a per-symbol breakdown.
+
 **Trades & Analytics tab** — pick a source (latest run / **all runs** / any specific
 run) and get a full performance breakdown: 18 stat cards (win rate, profit factor,
 expectancy, avg/largest win & loss, payoff, max drawdown, total fees, avg efficiency,
