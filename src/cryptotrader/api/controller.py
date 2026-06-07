@@ -37,6 +37,8 @@ class EngineController:
         self._task: asyncio.Task | None = None
         self._store: TradeStore | None = None
         self._lock = asyncio.Lock()
+        self._model_meta: dict | None = None
+        self._model_path = None
 
     @property
     def is_running(self) -> bool:
@@ -47,6 +49,10 @@ class EngineController:
         async with self._lock:
             if self.is_running:
                 return
+
+            # Safety: never place REAL orders with a missing/mismatched model.
+            if mode == "live" and real_orders:
+                self._guard_real_orders()
 
             feature_engine = self._build_feature_engine()
             predictor = self._build_predictor()
@@ -182,15 +188,46 @@ class EngineController:
         return PaperExecutionHandler(self.settings.execution)
 
     def _build_predictor(self):
-        """Load the trained LightGBM model if configured, else the baseline."""
-        path = self.settings.strategy.model_path
-        if path is not None and Path(path).exists():
-            from cryptotrader.ml.meta import load_predictor  # auto-detects meta vs plain
+        """Load the per-symbol trained model if present, else the baseline."""
+        from cryptotrader.ml.registry import resolve_model
+
+        path, meta = resolve_model(self.settings)
+        self._model_path, self._model_meta = path, meta
+        if path is not None:
+            from cryptotrader.ml.meta import load_predictor  # auto-detects type
 
             logger.info("Loading trained model from %s", path)
             return load_predictor(path)
-        logger.info("No trained model configured; using momentum baseline.")
+        logger.info("No trained model for %s; using momentum baseline.",
+                    self.settings.exchange.symbol)
         return MomentumBaselinePredictor()
+
+    def _guard_real_orders(self) -> None:
+        """Refuse REAL orders unless a model trained for THIS symbol/timeframe exists."""
+        from cryptotrader.ml.registry import resolve_model
+
+        path, meta = resolve_model(self.settings)
+        sym, tf = self.settings.exchange.symbol, self.settings.exchange.timeframe
+        if path is None:
+            raise RuntimeError(
+                f"Refusing REAL orders: no trained model for {sym}. "
+                f"Train and validate one first (Train now / walk-forward)."
+            )
+        if not meta:
+            raise RuntimeError(
+                f"Refusing REAL orders: the model at {path} has no training metadata, "
+                f"so its symbol cannot be verified. Retrain {sym} to create it."
+            )
+        if meta.get("symbol") != sym:
+            raise RuntimeError(
+                f"Refusing REAL orders: the loaded model was trained for "
+                f"{meta.get('symbol')}, not {sym}. Train a model for {sym}."
+            )
+        if meta.get("timeframe") != tf:
+            raise RuntimeError(
+                f"Refusing REAL orders: model timeframe {meta.get('timeframe')} "
+                f"≠ configured {tf}. Retrain for {tf}."
+            )
 
     async def _simulation_ohlcv(self):
         """OHLCV for accelerated simulation replay.
@@ -202,10 +239,17 @@ class EngineController:
         """
         import pandas as pd
 
+        from cryptotrader.ml.registry import holdout_path_for
+
         replay = self.settings.data.replay_file
         if replay is not None and Path(replay).exists():
             logger.info("Simulation: replaying held-out real data from %s", replay)
             return pd.read_parquet(replay)
+
+        per_symbol = holdout_path_for(self.settings.exchange.symbol)
+        if per_symbol.exists():
+            logger.info("Simulation: replaying held-out slice %s", per_symbol)
+            return pd.read_parquet(per_symbol)
 
         if self.settings.data.sim_source != "synthetic":
             from datetime import datetime, timedelta, timezone

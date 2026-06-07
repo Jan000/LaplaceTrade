@@ -45,29 +45,41 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.get("/api/model")
     async def model_info() -> JSONResponse:
-        """Which predictor the engine will load: the trained model or the baseline."""
+        """Which model the engine will load for the configured symbol, and whether it matches."""
         from datetime import datetime, timezone
 
+        from cryptotrader.ml.registry import resolve_model
+
         s = app.state.settings
-        path = s.strategy.model_path
-        p = Path(path) if path else None
-        exists = bool(p and p.exists())
-        info: dict = {
-            "configured_path": str(path) if path else None,
+        path, meta = resolve_model(s)
+        exists = path is not None
+        meta = meta or {}
+        model_symbol = meta.get("symbol")
+        model_tf = meta.get("timeframe")
+        # Strict match: metadata must confirm the exact symbol+timeframe (this gates real
+        # orders). A model without metadata cannot be verified and does not match.
+        matches = exists and model_symbol == s.exchange.symbol and model_tf == s.exchange.timeframe
+        trained_at = meta.get("saved_at")
+        size_bytes = None
+        if exists:
+            stat = path.stat()
+            size_bytes = stat.st_size
+            trained_at = trained_at or datetime.fromtimestamp(
+                stat.st_mtime, tz=timezone.utc).isoformat()
+        return JSONResponse({
             "exists": exists,
             "active": "trained model" if exists else "momentum baseline",
-            "trained_at": None,
-            "size_bytes": None,
-            "train_symbols": s.data.train_symbols,
-            "timeframe": s.exchange.timeframe,
-        }
-        if exists:
-            stat = p.stat()
-            info["trained_at"] = datetime.fromtimestamp(
-                stat.st_mtime, tz=timezone.utc
-            ).isoformat()
-            info["size_bytes"] = stat.st_size
-        return JSONResponse(info)
+            "model_path": str(path) if path else None,
+            "model_symbol": model_symbol,
+            "model_timeframe": model_tf,
+            "configured_symbol": s.exchange.symbol,
+            "configured_timeframe": s.exchange.timeframe,
+            "train_symbols": meta.get("train_symbols", s.data.train_symbols),
+            "trained_at": trained_at,
+            "size_bytes": size_bytes,
+            "matches": bool(matches),
+            "real_ok": bool(matches),  # real orders allowed only when a matching model exists
+        })
 
     @app.post("/api/start")
     async def start(req: StartRequest) -> JSONResponse:

@@ -165,11 +165,16 @@
   </div>
 
   <div class="card wide">
-    <div class="row">
+    <div class="row" style="flex-wrap:wrap">
       <h2 style="margin:0">Training</h2><div class="spacer"></div>
+      <span class="sym">Target symbol</span>
+      <input type="text" id="job-symbol" placeholder="config default" style="width:130px">
       <span id="train-state" class="sym">idle</span>
-      <button id="train-btn" class="primary">Train now (uses saved config)</button>
+      <button id="train-btn" class="primary">Train now</button>
     </div>
+    <div class="sym" style="margin-bottom:8px;font-size:11.5px">Leave the target blank to use the configured symbol.
+      Each coin gets its own model (<code>models/model_&lt;SYMBOL&gt;.pkl</code>); switch by setting <code>exchange.symbol</code>.
+      The same target applies to the validation jobs below.</div>
     <div id="model-status" class="sym" style="margin-bottom:10px">Model: …</div>
     <div id="train-log">Train output will appear here…</div>
   </div>
@@ -325,13 +330,21 @@ $("cfg-save").onclick=async()=>{$("cfg-msg").textContent="saving…";
   $("cfg-msg").textContent=r.ok?"saved ✓ — retrain to apply feature/model changes":("error: "+(b.error||"")); };
 
 /* ---------- model status ---------- */
+function jobSymbolArgs(){const s=$("job-symbol").value.trim(); return s?["--symbol",s]:[];}
 async function loadModel(){
   try{const m=await fetch("/api/model").then(r=>r.json());
-    const when=m.trained_at?new Date(m.trained_at).toLocaleString():null;
+    const when=m.trained_at?new Date(m.trained_at).toLocaleString():"?";
     const pool=(m.train_symbols&&m.train_symbols.length)?` · pooled: ${m.train_symbols.join(", ")}`:"";
-    $("model-status").innerHTML=m.exists
-      ? `Active model: <b style="color:var(--green)">trained</b> (${m.configured_path}, ${m.timeframe}, trained ${when}, ${(m.size_bytes/1e6).toFixed(1)} MB)${pool}`
-      : `Active model: <b style="color:var(--amber)">momentum baseline</b> — no file at ${m.configured_path||"strategy.model_path (unset)"}. Train to create it.`;
+    if(!m.exists){
+      $("model-status").innerHTML=`Active model: <b style="color:var(--amber)">momentum baseline</b> — no model for ${m.configured_symbol}. Train one (real orders are blocked until you do).`;
+    }else if(!m.matches){
+      $("model-status").innerHTML=`<b style="color:var(--red)">⚠ Model mismatch</b> — loaded model is for `+
+        `<b>${m.model_symbol||"?"}/${m.model_timeframe||"?"}</b> but config is <b>${m.configured_symbol}/${m.configured_timeframe}</b>. `+
+        `Real orders are BLOCKED. Train a model for ${m.configured_symbol} (${m.configured_timeframe}).`;
+    }else{
+      $("model-status").innerHTML=`Active model: <b style="color:var(--green)">${m.model_symbol||m.configured_symbol} / ${m.model_timeframe||m.configured_timeframe}</b> `+
+        `(${m.model_path}, trained ${when})${pool}`;
+    }
   }catch(e){$("model-status").textContent="Model: (status unavailable)";}
 }
 
@@ -339,7 +352,9 @@ async function loadModel(){
 let trainTimer=null;
 $("train-btn").onclick=async()=>{
   $("train-btn").disabled=true; $("train-state").textContent="starting…";
-  await fetch("/api/train",{method:"POST"}); pollTrain(true);};
+  await fetch("/api/job",{method:"POST",headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({kind:"train",args:jobSymbolArgs()})});
+  pollTrain(true);};
 function pollTrain(loop){fetch("/api/train/status").then(r=>r.json()).then(s=>{
   $("train-state").textContent=s.status; $("train-log").textContent=s.log||"(no output yet)";
   $("train-log").scrollTop=$("train-log").scrollHeight; $("train-btn").disabled=s.running;
@@ -427,7 +442,7 @@ $("keys-clear").onclick=async()=>{if(!confirm("Remove the stored API keys?"))ret
 let valTimer=null;
 function startJob(kind){
   const days=$("val-days").value;
-  const args=days?["--days",days]:[];
+  const args=jobSymbolArgs().concat(days?["--days",days]:[]);
   $("wf-btn").disabled=true; $("ho-btn").disabled=true; $("wf-state").textContent="starting…";
   fetch("/api/job",{method:"POST",headers:{"Content-Type":"application/json"},
     body:JSON.stringify({kind,args})}).then(r=>r.json()).then(j=>{

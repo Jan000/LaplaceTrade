@@ -18,11 +18,11 @@ data:
   history_days: 730       # how much history to pull for backtests
   cache_dir: .cache/ohlcv
   # Simulation replays REAL data (accelerated) — far more meaningful than a random walk.
-  # Default = the held-out slice train_model.py writes (the model never saw it = honest
-  # out-of-sample). If that file is absent it falls back to the last `sim_days` of real
-  # market data (note: that window likely OVERLAPS training -> in-sample/optimistic; use
-  # the Validation panel's walk-forward/holdout for the rigorous edge check).
-  replay_file: models/holdout.parquet
+  # Source precedence: replay_file (explicit override, below) -> the per-symbol held-out
+  # slice train_model.py writes (models/holdout_<SYMBOL>.parquet; the model never saw it
+  # = honest out-of-sample) -> last `sim_days` of real market data (note: likely OVERLAPS
+  # training -> optimistic; use the Validation panel for the rigorous check) -> synthetic.
+  # replay_file: models/holdout_BTCUSDT.parquet   # uncomment to pin a specific slice
   sim_source: auto        # auto | real | synthetic (synthetic = force offline)
   sim_days: 90
   # Pool ETH into the TRAINING set (BTC is still what we trade/test). ETH is the most
@@ -132,10 +132,9 @@ strategy:
   long_threshold: 0.50    # permissive: the EV gate is now the real filter
   short_threshold: 0.50
   allow_short: true
-  model_path: models/model.pkl   # trained model loaded by the live/sim engine at start.
-                                  # Safe if absent: the engine falls back to the momentum
-                                  # baseline until you run a training (Dashboard "Train now"
-                                  # or scripts/train_model.py writes exactly this file).
+  # model_path: (unset) — the engine loads the PER-SYMBOL model models/model_<SYMBOL>.pkl
+  # written by training, and falls back to the momentum baseline if none exists. Set this
+  # only to pin one specific model file (advanced/legacy single-model use).
 
 # Triple barriers — shared by the training labels AND the trade exits, so the
 # backtest/live engine harvests exactly what the model was trained to predict.

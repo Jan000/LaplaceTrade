@@ -30,6 +30,23 @@ def test_dashboard_and_state(tmp_path) -> None:
         assert client.get("/api/trades?run_id=all").json() == []
 
 
+def test_real_orders_guardrail(tmp_path, monkeypatch) -> None:
+    """REAL orders must be refused when no matching model exists for the symbol."""
+    import cryptotrader.ml.registry as registry
+
+    monkeypatch.setattr(registry, "MODELS_DIR", tmp_path / "models")  # empty -> no model
+    settings = Settings()
+    settings.strategy.model_path = None
+    settings.persistence.db_path = tmp_path / "g.sqlite"
+    app = create_app(settings)
+    with TestClient(app) as client:
+        m = client.get("/api/model").json()
+        assert m["exists"] is False and m["real_ok"] is False
+        r = client.post("/api/start", json={"mode": "live", "real_orders": True})
+        assert r.status_code == 400
+        assert "no trained model" in r.json().get("error", "").lower()
+
+
 def test_runs_keys_and_jobs(tmp_path, monkeypatch) -> None:
     import cryptotrader.config as cfg
 

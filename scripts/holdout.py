@@ -52,6 +52,7 @@ async def fetch(settings: Settings, symbol: str, days: int):
 def main() -> None:
     parser = argparse.ArgumentParser(description="Out-of-sample holdout check")
     parser.add_argument("--days", type=int, default=None)
+    parser.add_argument("--symbol", type=str, default=None, help="primary symbol (overrides config)")
     parser.add_argument("--train-frac", type=float, default=0.7,
                         help="fraction of history used for the single training split")
     parser.add_argument("--extra", nargs="*", default=["SOL/USDT", "BNB/USDT", "XRP/USDT", "ADA/USDT"],
@@ -60,6 +61,8 @@ def main() -> None:
 
     logging.basicConfig(level=logging.WARNING, format="%(levelname)s %(name)s: %(message)s")
     settings = Settings.load()
+    if args.symbol:
+        settings.exchange.symbol = args.symbol
     days = args.days if args.days is not None else settings.data.history_days
     primary = settings.exchange.symbol
     pool = list(settings.data.train_symbols)

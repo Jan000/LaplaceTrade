@@ -86,20 +86,28 @@ separately, so test runs never pollute your real track record.
    `risk.account_equity` (your starting capital), `risk.risk_per_trade` (e.g. 0.005 =
    0.5%/trade), `risk.max_leverage` (keep 1.0 to start) — and `execution.taker_fee` /
    `slippage_bps` to match your exchange tier. **Save to config.yaml**.
-3. **Train** — click **Train now**; wait until the model-status line shows a *trained*
-   model. (Re-train after any feature/model/barrier change.)
-4. **Validate** — run **walk-forward** (and **holdout**). Only go further if the verdict
-   is ROBUST / positive out of sample. This is your edge check — don't skip it.
-5. **Paper-test on live data** — header: mode **Live**, leave **real orders OFF**, press
-   **Start**. Watch the Monitor; let it run long enough to see real-time behaviour. No
-   funds are at risk.
+3. **Train** — set an optional **Target symbol** (blank = configured symbol) and click
+   **Train now**. Each coin gets its own model file `models/model_<SYMBOL>.pkl` plus a
+   metadata sidecar; wait until the model-status line shows a matching *trained* model.
+   (Re-train after any feature/model/barrier change.)
+4. **Validate** — run **walk-forward** (and **holdout**) for the same target. Only go
+   further if the verdict is ROBUST / positive out of sample. This is your edge check.
+5. **Simulate (fast, real data)** — switch to the **Simulation** mode and **Start**: it
+   replays the held-out real slice through the live engine in seconds. Watch *Trades &
+   Analytics* (Environment = Simulation). This is the quick way to *see* behaviour —
+   far more useful than waiting in real time on Live data.
+5b. **Paper-test on live data** (optional) — mode **Live**, **real orders OFF**, **Start**:
+   confirms the real-time plumbing (connectivity, the price appears immediately via
+   warm-up). On higher timeframes the next decision only comes when a candle closes.
 6. **Connect your account** — Settings → **Exchange API Keys**: paste the API key/secret
    for `exchange.id`. On the exchange, create a key that **allows spot trading but NOT
    withdrawals**, and ideally restrict it to your server's IP. Keys are stored only in
    git-ignored `config/secrets.yaml`, never echoed back.
 7. **Go live (real money)** — header: mode **Live**, tick **real orders**, press
    **Start**, confirm the prompt. The header shows **⚠ REAL MONEY** while it runs. Start
-   small (low `risk_per_trade`, `max_leverage` 1.0).
+   small (low `risk_per_trade`, `max_leverage` 1.0). **Guardrail:** real orders are
+   *refused* unless a model trained for the exact configured symbol+timeframe exists —
+   so you can't accidentally trade a coin with another coin's model (or the baseline).
 8. **Monitor & analyse** — Monitor tab for the live run; **Trades & Analytics → Environment
    = Real money** for your real track record (stats, full filterable trade log, CSV).
 9. **Maintain** — re-train on a rolling window periodically and re-validate; **Stop** to
