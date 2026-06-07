@@ -512,7 +512,7 @@ async function loadModel(){   // detailed status of the CONFIGURED symbol, shown
 }
 
 /* ---------- jobs (concurrent training / walk-forward / holdout) ---------- */
-let JOBS=[], JOB_OPEN={}, jobsTimer=null, prevRunning=0;
+let JOBS=[], JOB_OPEN={}, jobsTimer=null, prevRunning=0, _jobsSig="";
 const cssid=k=>k.replace(/[^a-zA-Z0-9]/g,"_");
 async function startJobFor(kind,symbol){
   await fetch("/api/job",{method:"POST",headers:{"Content-Type":"application/json"},
@@ -529,7 +529,17 @@ async function refreshJobs(){
   const need = running>0 || Object.keys(JOB_OPEN).some(k=>JOB_OPEN[k]);
   clearInterval(jobsTimer); jobsTimer = need ? setInterval(refreshJobs,2000) : null;
 }
+/* Only rebuild the list DOM when the job set / status / open-state changes; otherwise
+   just refresh the log TEXT in place — so live logs don't flicker or lose scroll. */
+function jobsSignature(){
+  return JSON.stringify(JOBS.map(j=>[j.key,j.status,j.running,!!JOB_OPEN[j.key]]));
+}
 function renderJobs(){
+  const sig=jobsSignature();
+  if(sig!==_jobsSig){ buildJobsDOM(); _jobsSig=sig; }
+  JOBS.forEach(j=>{ if(JOB_OPEN[j.key]) loadJobLog(j.key); });   // in-place text update
+}
+function buildJobsDOM(){
   const box=$("jobs-list");
   if(!JOBS.length){box.innerHTML=`<div class="flat">No training / validation jobs yet.</div>`;return;}
   box.innerHTML=JOBS.map(j=>{
@@ -540,16 +550,21 @@ function renderJobs(){
         <span class="sym" style="color:${col}">&nbsp;${j.status}${j.running?"…":""}</span>
         <div class="spacer"></div>
         <button class="ghost btn-xs" data-log="${j.key}">${open?"Hide log":"Log"}</button>
-      </div>${open?`<div class="joblog" id="joblog-${cssid(j.key)}">loading…</div>`:""}</div>`;
+      </div>${open?`<div class="joblog" id="joblog-${cssid(j.key)}"></div>`:""}</div>`;
   }).join("");
   box.querySelectorAll("button[data-log]").forEach(b=>b.onclick=()=>{
-    JOB_OPEN[b.dataset.log]=!JOB_OPEN[b.dataset.log]; renderJobs(); refreshJobs();});
-  JOBS.forEach(j=>{ if(JOB_OPEN[j.key]) loadJobLog(j.key); });
+    JOB_OPEN[b.dataset.log]=!JOB_OPEN[b.dataset.log]; renderJobs();});
 }
 async function loadJobLog(key){
+  const el=document.getElementById("joblog-"+cssid(key));
+  if(!el)return;
   try{const d=await fetch("/api/job/log?key="+encodeURIComponent(key)).then(r=>r.json());
-    const el=document.getElementById("joblog-"+cssid(key));
-    if(el){el.textContent=d.log||"(no output yet)"; el.scrollTop=el.scrollHeight;}
+    const text=d.log||"(no output yet)";
+    if(el.textContent!==text){                          // only touch the DOM on real change
+      const atBottom=el.scrollTop+el.clientHeight>=el.scrollHeight-24;
+      el.textContent=text;
+      if(atBottom)el.scrollTop=el.scrollHeight;          // keep pinned to bottom if it was
+    }
   }catch(e){}
 }
 $("jobs-reload").onclick=refreshJobs;
