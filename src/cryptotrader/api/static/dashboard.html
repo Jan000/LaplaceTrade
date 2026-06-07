@@ -62,6 +62,7 @@
     <button id="tab-trades" class="ghost">Trades &amp; Analytics</button>
     <button id="tab-settings" class="ghost">Settings &amp; Training</button>
     <select id="mode"><option value="simulation">Simulation</option><option value="live">Live data</option></select>
+    <span id="model-badge" class="sym hidden" style="font-size:12px"></span>
     <label id="real-wrap" class="hidden" title="Place REAL orders on the exchange (requires API keys). Paper fills otherwise.">
       <input type="checkbox" id="real-orders"><span style="color:var(--amber);font-size:12.5px">&nbsp;real orders</span>
     </label>
@@ -265,13 +266,21 @@ async function loadHistory(){
       efficiency_ratio:t.efficiency_ratio,exit_reason:t.exit_reason,exit_time:t.exit_time})));
   }catch(e){}
 }
-/* real-orders toggle only relevant for live mode */
+/* real-orders toggle only relevant for live mode, and gated by the model guardrail */
 function syncModeUI(){const live=$("mode").value==="live";
-  $("real-wrap").classList.toggle("hidden",!live); if(!live)$("real-orders").checked=false;}
-$("mode").onchange=syncModeUI; syncModeUI();
-function setRunning(r){$("start").disabled=r;$("stop").disabled=!r;$("mode").disabled=r;$("real-orders").disabled=r;}
+  $("real-wrap").classList.toggle("hidden",!live);
+  $("model-badge").classList.toggle("hidden",!live);
+  if(!live)$("real-orders").checked=false;
+  loadModel();}   // refresh badge + real-orders gating for the current config
+$("mode").onchange=syncModeUI;
+function setRunning(r){$("start").disabled=r;$("stop").disabled=!r;$("mode").disabled=r;
+  $("real-orders").disabled = r || !realOrdersAllowed();}
 $("start").onclick=async()=>{
   const real=$("mode").value==="live"&&$("real-orders").checked;
+  if(real&&!realOrdersAllowed()){
+    alert("Real orders are blocked: no trained model matching the configured symbol/timeframe. "+
+          "Train and validate one first (Settings & Training).");
+    return;}
   if(real&&!confirm("Place REAL orders on the exchange with live funds? This is not a simulation.")) return;
   viewingRun=null; $("run-select").value="";   // a new run -> leave any historical view
   setRunning(true);
@@ -285,6 +294,7 @@ function connect(){const proto=location.protocol==="https:"?"wss":"ws";
   ws.onmessage=(e)=>{const s=JSON.parse(e.data);render(s);setRunning(s.status==="running");};
   ws.onclose=()=>setTimeout(connect,1500);}
 connect();
+syncModeUI();   // sets the real-orders gating + model badge on load
 fetch("/api/state").then(r=>r.json()).then(s=>{render(s);
   // If nothing is live yet, fall back to persisted history from the DB.
   if(!(s.recent_trades&&s.recent_trades.length)) loadHistory();});
@@ -327,12 +337,33 @@ $("cfg-reload").onclick=loadConfig;
 $("cfg-save").onclick=async()=>{$("cfg-msg").textContent="saving…";
   const r=await fetch("/api/config",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(collectConfig())});
   const b=await r.json();
-  $("cfg-msg").textContent=r.ok?"saved ✓ — retrain to apply feature/model changes":("error: "+(b.error||"")); };
+  $("cfg-msg").textContent=r.ok?"saved ✓ — retrain to apply feature/model changes":("error: "+(b.error||""));
+  if(r.ok) loadModel(); };   // symbol/timeframe may have changed -> refresh model match + gating
 
 /* ---------- model status ---------- */
+let MODELINFO=null;
 function jobSymbolArgs(){const s=$("job-symbol").value.trim(); return s?["--symbol",s]:[];}
+function realOrdersAllowed(){return !!(MODELINFO&&MODELINFO.real_ok);}
+function updateModelBadge(m){
+  const badge=$("model-badge"); const live=$("mode").value==="live";
+  badge.classList.toggle("hidden",!live);
+  if(!m){badge.textContent="";}
+  else if(!m.exists){badge.textContent=`⚠ no model for ${m.configured_symbol}`; badge.style.color="var(--amber)";}
+  else if(!m.matches){badge.textContent=`⚠ model ${m.model_symbol}/${m.model_timeframe} ≠ ${m.configured_symbol}/${m.configured_timeframe}`; badge.style.color="var(--red)";}
+  else{badge.textContent=`model ${m.model_symbol}/${m.model_timeframe} ✓`; badge.style.color="var(--green)";}
+  // Gate the real-orders toggle to the guardrail (never allow real money on a wrong/no model).
+  if(!realOrdersAllowed()){
+    $("real-orders").checked=false;
+    $("real-wrap").title=(m&&m.exists)
+      ? `Real orders blocked: model is for ${m.model_symbol}/${m.model_timeframe}, not ${m.configured_symbol}/${m.configured_timeframe}.`
+      : `Real orders blocked: no trained model for ${m?m.configured_symbol:"this symbol"}. Train & validate first.`;
+  }else{
+    $("real-wrap").title="Place REAL orders on the exchange (requires API keys).";
+  }
+  $("real-orders").disabled = $("start").disabled || !realOrdersAllowed();
+}
 async function loadModel(){
-  try{const m=await fetch("/api/model").then(r=>r.json());
+  try{const m=await fetch("/api/model").then(r=>r.json()); MODELINFO=m;
     const when=m.trained_at?new Date(m.trained_at).toLocaleString():"?";
     const pool=(m.train_symbols&&m.train_symbols.length)?` · pooled: ${m.train_symbols.join(", ")}`:"";
     if(!m.exists){
@@ -345,6 +376,7 @@ async function loadModel(){
       $("model-status").innerHTML=`Active model: <b style="color:var(--green)">${m.model_symbol||m.configured_symbol} / ${m.model_timeframe||m.configured_timeframe}</b> `+
         `(${m.model_path}, trained ${when})${pool}`;
     }
+    updateModelBadge(m);
   }catch(e){$("model-status").textContent="Model: (status unavailable)";}
 }
 
