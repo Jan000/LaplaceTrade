@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import sys
 from pathlib import Path
 
@@ -87,9 +88,13 @@ class JobManager:
         LOG_DIR.mkdir(parents=True, exist_ok=True)
         args = (["--symbol", symbol] if symbol else []) + list(extra_args or [])
         logf = open(self._log_path(kind, symbol), "wb")
+        # -u + PYTHONUNBUFFERED so the script's stdout/stderr stream to the log file live
+        # (block-buffered stdout otherwise only appears when the process exits — the
+        # cause of a multi-minute job showing "(no output yet)" the whole time).
+        env = {**os.environ, "PYTHONUNBUFFERED": "1"}
         proc = await asyncio.create_subprocess_exec(
-            sys.executable, self.SCRIPTS[kind], *args,
-            stdout=logf, stderr=asyncio.subprocess.STDOUT,
+            sys.executable, "-u", self.SCRIPTS[kind], *args,
+            stdout=logf, stderr=asyncio.subprocess.STDOUT, env=env,
         )
         self._jobs[key] = {"kind": kind, "symbol": symbol, "proc": proc, "status": "running"}
         asyncio.create_task(self._wait(key))
