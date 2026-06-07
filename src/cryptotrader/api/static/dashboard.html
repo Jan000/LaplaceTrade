@@ -33,9 +33,14 @@
   .cfg-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:18px;}
   fieldset{border:1px solid var(--line);border-radius:9px;padding:12px 14px;}
   legend{color:var(--accent);font-size:12px;text-transform:uppercase;letter-spacing:.5px;padding:0 6px;}
-  .field{display:flex;align-items:center;justify-content:space-between;gap:10px;margin:5px 0;}
-  .field label{color:var(--muted);font-size:12.5px;} .field input[type=text],.field input[type=number]{width:130px;text-align:right;}
-  .field input[type=checkbox]{width:auto;}
+  .field{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:6px 10px;margin:7px 0;}
+  .field label{color:var(--txt);font-size:12.5px;} .field input[type=text],.field input[type=number]{width:150px;text-align:right;}
+  .field select{width:160px;} .field input[type=checkbox]{width:auto;transform:scale(1.2);}
+  .field .help{flex-basis:100%;color:var(--muted);font-size:10.5px;margin:-1px 0 2px;}
+  details.adv{grid-column:1/-1;margin-top:6px;border:1px solid var(--line);border-radius:9px;padding:4px 12px;background:var(--panel2);}
+  details.adv>summary{cursor:pointer;color:var(--accent);font-size:12.5px;padding:8px 2px;list-style:none;}
+  details.adv>summary::before{content:"▸ ";} details.adv[open]>summary::before{content:"▾ ";}
+  details.adv .cfg-grid{margin:8px 0;}
   #train-log,#val-log{white-space:pre-wrap;font-family:ui-monospace,monospace;font-size:11.5px;color:var(--muted);
              background:#0d1018;border:1px solid var(--line);border-radius:8px;padding:10px;max-height:260px;overflow:auto;}
   code{background:#0d1018;padding:1px 5px;border-radius:4px;}
@@ -169,7 +174,11 @@
     <div class="row" style="flex-wrap:wrap">
       <h2 style="margin:0">Training</h2><div class="spacer"></div>
       <span class="sym">Target symbol</span>
-      <input type="text" id="job-symbol" placeholder="config default" style="width:130px">
+      <input type="text" id="job-symbol" list="dl-symbols" placeholder="config default" style="width:130px">
+      <datalist id="dl-symbols">
+        <option value="BTC/USDT"><option value="ETH/USDT"><option value="SOL/USDT"><option value="BNB/USDT">
+        <option value="XRP/USDT"><option value="ADA/USDT"><option value="DOGE/USDT"><option value="LTC/USDT">
+      </datalist>
       <span id="train-state" class="sym">idle</span>
       <button id="train-btn" class="primary">Train now</button>
     </div>
@@ -299,23 +308,97 @@ fetch("/api/state").then(r=>r.json()).then(s=>{render(s);
   // If nothing is live yet, fall back to persisted history from the DB.
   if(!(s.recent_trades&&s.recent_trades.length)) loadHistory();});
 
-/* ---------- config editor ---------- */
+/* ---------- config editor (schema-driven, friendly controls) ---------- */
 let CONFIG={};
 const EDIT_SECTIONS=["exchange","data","features","model","risk","execution","strategy","barriers"];
-function inputFor(section,key,val){
-  const id=`cfg__${section}__${key}`;
-  if(typeof val==="boolean") return `<input type="checkbox" id="${id}" ${val?"checked":""}>`;
-  if(Array.isArray(val)) return `<input type="text" id="${id}" value="${val.join(', ')}">`;
-  if(typeof val==="number") return `<input type="number" step="any" id="${id}" value="${val}">`;
-  if(val===null) return `<input type="text" id="${id}" value="" placeholder="null">`;
-  return `<input type="text" id="${id}" value="${val??''}">`;
+const SYMBOLS=["BTC/USDT","ETH/USDT","SOL/USDT","BNB/USDT","XRP/USDT","ADA/USDT","DOGE/USDT","LTC/USDT","AVAX/USDT","LINK/USDT"];
+const TIMEFRAMES=["1m","5m","15m","30m","1h","4h","1d"];
+const EXCHANGES=["binance","binanceus","bybit","kraken","coinbase","okx","kucoin"];
+const SECTION_TITLE={exchange:"Exchange & market",data:"Data & simulation",
+  barriers:"Trade barriers (TP / SL / horizon)",risk:"Risk & sizing",strategy:"Strategy filters",
+  execution:"Execution & costs",model:"Model",features:"Feature windows"};
+const SECTION_ORDER=["exchange","data","barriers","risk","strategy","execution","model","features"];
+const F={
+  "exchange.id":{label:"Exchange",ctl:"datalist",options:EXCHANGES,help:"ccxt exchange id"},
+  "exchange.symbol":{label:"Symbol",ctl:"datalist",options:SYMBOLS,help:"Market to trade"},
+  "exchange.timeframe":{label:"Timeframe",ctl:"select",options:TIMEFRAMES,help:"Candle size — 4h recommended"},
+  "data.history_days":{label:"History (days)",ctl:"int",min:30},
+  "data.train_symbols":{label:"Pooled training symbols",ctl:"list",help:"Correlated symbols added to TRAINING only, e.g. ETH/USDT"},
+  "data.sim_source":{label:"Simulation data",ctl:"select",options:["auto","real","synthetic"],help:"auto = held-out real slice → recent real → synthetic"},
+  "data.sim_days":{label:"Simulation days",ctl:"int",min:7},
+  "data.cache_dir":{adv:true},"data.replay_file":{adv:true},
+  "barriers.tp_mult":{label:"Take-profit (×ATR)",ctl:"float",step:0.1,min:0.1},
+  "barriers.sl_mult":{label:"Stop-loss (×ATR)",ctl:"float",step:0.1,min:0.1},
+  "barriers.horizon":{label:"Max hold (bars)",ctl:"int",min:1},
+  "barriers.label_tp_mult":{label:"Label TP (×ATR)",ctl:"float",step:0.1,help:"Symmetric label barrier (unbiased direction)"},
+  "barriers.label_sl_mult":{label:"Label SL (×ATR)",ctl:"float",step:0.1},
+  "risk.account_equity":{label:"Account equity ($)",ctl:"float",step:100,min:0},
+  "risk.risk_per_trade":{label:"Risk per trade",ctl:"float",step:0.001,min:0,help:"Fraction of equity — 0.005 = 0.5%"},
+  "risk.max_leverage":{label:"Max leverage",ctl:"float",step:0.5,min:0},
+  "risk.cooldown_bars":{label:"Cooldown (bars)",ctl:"int",min:0},
+  "risk.use_ev_filter":{label:"EV entry gate",ctl:"bool",help:"Trade only if expected value > minimum"},
+  "risk.min_expected_value":{label:"Min expected value",ctl:"float",step:0.1},
+  "risk.min_edge_cost_ratio":{adv:true},"risk.atr_stop_mult":{adv:true},
+  "risk.atr_trail_mult":{adv:true},"risk.max_open_positions":{adv:true},
+  "strategy.long_threshold":{label:"Long threshold",ctl:"float",step:0.01,min:0,max:1},
+  "strategy.short_threshold":{label:"Short threshold",ctl:"float",step:0.01,min:0,max:1},
+  "strategy.allow_short":{label:"Allow shorts",ctl:"bool"},
+  "strategy.trend_filter":{label:"Trend filter",ctl:"bool",help:"Only trade with the slow-EMA trend"},
+  "strategy.model_path":{adv:true},
+  "execution.taker_fee":{label:"Taker fee",ctl:"float",step:0.0001,help:"0.0004 = 4 bps"},
+  "execution.slippage_bps":{label:"Slippage (bps)",ctl:"float",step:0.5},
+  "execution.entry_order_type":{label:"Entry order",ctl:"select",options:["market","limit"]},
+  "execution.maker_fee":{label:"Maker fee",ctl:"float",step:0.0001},
+  "execution.limit_offset_bps":{label:"Limit offset (bps)",ctl:"float",step:0.5},
+  "model.ensemble_size":{label:"Ensemble size",ctl:"int",min:1,help:"Average N seed-varied models"},
+  "model.use_meta_labeling":{label:"Meta-labeling",ctl:"bool"},
+  "model.drop_features":{label:"Dropped features",ctl:"list",help:"Feature names excluded from training"},
+  "model.class_weight":{label:"Class weight",ctl:"select",options:["","balanced"]},
+  "model.bagging_freq":{label:"Bagging frequency",ctl:"int",min:0},
+  "model.n_estimators":{adv:true},"model.learning_rate":{adv:true},"model.num_leaves":{adv:true},
+  "model.max_depth":{adv:true},"model.min_child_samples":{adv:true},"model.subsample":{adv:true},
+  "model.colsample_bytree":{adv:true},"model.reg_lambda":{adv:true},"model.random_state":{adv:true},
+  "model.eval_fraction":{adv:true},"model.test_fraction":{adv:true},
+};
+function _spec(sec,k){return F[`${sec}.${k}`]||{};}
+function isAdvanced(sec,k){return sec==="features" || !!_spec(sec,k).adv;}
+function ctlHtml(sec,k,val){
+  const id=`cfg__${sec}__${k}`, s=_spec(sec,k);
+  const ctl=s.ctl||(typeof val==="boolean"?"bool":Array.isArray(val)?"list":typeof val==="number"?"float":"text");
+  if(ctl==="bool") return `<input type="checkbox" id="${id}" ${val?"checked":""}>`;
+  if(ctl==="select"){
+    let opts=(s.options||[]).map(String); const cur=val===null?"":String(val);
+    if(!opts.includes(cur)) opts=[cur,...opts];
+    return `<select id="${id}">`+opts.map(o=>`<option value="${o}" ${o===cur?"selected":""}>${o===""?"— none —":o}</option>`).join("")+`</select>`;
+  }
+  if(ctl==="datalist"){const dl=`dl_${id}`;
+    return `<input type="text" id="${id}" list="${dl}" value="${val??''}">`+
+      `<datalist id="${dl}">`+(s.options||[]).map(o=>`<option value="${o}">`).join("")+`</datalist>`;}
+  if(ctl==="list") return `<input type="text" id="${id}" value="${Array.isArray(val)?val.join(', '):(val??'')}">`;
+  if(ctl==="int"||ctl==="float"){
+    const step=s.step!=null?s.step:(ctl==="int"?1:"any");
+    const mm=(s.min!=null?`min="${s.min}" `:"")+(s.max!=null?`max="${s.max}" `:"");
+    return `<input type="number" step="${step}" ${mm}id="${id}" value="${val??''}">`;}
+  return `<input type="text" id="${id}" value="${val??''}" ${val===null?'placeholder="null"':''}>`;
+}
+function fieldHtml(sec,k,val){
+  const s=_spec(sec,k); const help=s.help?`<span class="help">${s.help}</span>`:"";
+  return `<div class="field"><label title="${sec}.${k}">${s.label||k}</label>${ctlHtml(sec,k,val)}${help}</div>`;
 }
 function loadConfig(){
   fetch("/api/config").then(r=>r.json()).then(cfg=>{CONFIG=cfg;
-    $("cfg-form").innerHTML=EDIT_SECTIONS.map(sec=>{const obj=cfg[sec]||{};
-      const fields=Object.keys(obj).filter(k=>!["api_key","api_secret"].includes(k)).map(k=>
-        `<div class="field"><label title="${sec}.${k}">${k}</label>${inputFor(sec,k,obj[k])}</div>`).join("");
-      return `<fieldset><legend>${sec}</legend>${fields}</fieldset>`;}).join("");
+    const common=[], adv=[];
+    for(const sec of SECTION_ORDER){
+      const obj=cfg[sec]||{};
+      const keys=Object.keys(obj).filter(k=>!["api_key","api_secret"].includes(k));
+      const c=keys.filter(k=>!isAdvanced(sec,k)), a=keys.filter(k=>isAdvanced(sec,k));
+      const title=SECTION_TITLE[sec]||sec;
+      if(c.length) common.push(`<fieldset><legend>${title}</legend>${c.map(k=>fieldHtml(sec,k,obj[k])).join("")}</fieldset>`);
+      if(a.length) adv.push(`<fieldset><legend>${title}</legend>${a.map(k=>fieldHtml(sec,k,obj[k])).join("")}</fieldset>`);
+    }
+    $("cfg-form").innerHTML=common.join("")+(adv.length
+      ? `<details class="adv"><summary>Advanced parameters — feature windows & model internals</summary><div class="cfg-grid">${adv.join("")}</div></details>`
+      : "");
     $("cfg-msg").textContent="";});
 }
 function collectConfig(){
