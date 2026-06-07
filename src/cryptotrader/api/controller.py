@@ -137,7 +137,12 @@ class EngineController:
             hist = await feed.fetch_history(start, use_cache=False)
             if hist.empty:
                 return []
-            return HistoricalDataHandler(hist).bars[-need:]
+            bars = HistoricalDataHandler(hist).bars
+            # Drop the last candle: it may still be forming. The first decision then
+            # uses the last CLOSED candle, and the live stream delivers the rest.
+            if len(bars) > 1:
+                bars = bars[:-1]
+            return bars[-need:]
         except Exception:
             logger.exception("Live warmup history unavailable; starting cold.")
             return []
