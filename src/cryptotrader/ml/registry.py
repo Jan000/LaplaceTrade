@@ -54,6 +54,18 @@ def read_meta(model_path: str | Path) -> dict | None:
         return None
 
 
+def list_models(base: Path | str | None = None) -> list[dict]:
+    """All trained per-symbol models on disk, with their metadata."""
+    root = Path(base or MODELS_DIR)
+    out: list[dict] = []
+    if not root.exists():
+        return out
+    for p in sorted(root.glob("model_*.pkl")):
+        meta = read_meta(p) or {}
+        out.append({"path": str(p), "symbol": meta.get("symbol"), "meta": meta})
+    return out
+
+
 def resolve_model(settings) -> tuple[Path | None, dict | None]:
     """Choose the model to load for ``settings.exchange.symbol``.
 

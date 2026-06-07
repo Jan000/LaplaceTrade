@@ -51,6 +51,8 @@
   .stat{background:var(--panel2);border:1px solid var(--line);border-radius:9px;padding:10px 12px;}
   .stat .k{color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.4px;}
   .stat .v{font-size:18px;font-weight:600;margin-top:4px;}
+  button.btn-xs{padding:3px 8px;font-size:11px;margin:0 1px;}
+  #sym-rows td{white-space:nowrap;}
   #t-table th{cursor:pointer;user-select:none;white-space:nowrap;}
   #t-table th:hover{color:var(--txt);}
   @media(max-width:1100px){.stat-grid{grid-template-columns:repeat(3,1fr);}}
@@ -64,6 +66,7 @@
   <div class="spacer"></div>
   <div class="controls">
     <button id="tab-monitor" class="primary">Monitor</button>
+    <button id="tab-symbols" class="ghost">Symbols</button>
     <button id="tab-trades" class="ghost">Trades &amp; Analytics</button>
     <button id="tab-settings" class="ghost">Settings &amp; Training</button>
     <select id="mode"><option value="simulation">Simulation</option><option value="live">Live data</option></select>
@@ -95,6 +98,28 @@
   <div class="card wide"><h2>Recent Trades</h2><div class="tbl-wrap"><table>
     <thead><tr><th>Side</th><th>Entry</th><th>Exit</th><th>Net PnL</th><th>Efficiency</th><th>Reason</th><th>Exit</th></tr></thead>
     <tbody id="trades"><tr><td colspan="7" class="flat">No trades yet.</td></tr></tbody></table></div></div>
+</main>
+
+<!-- ============ SYMBOLS ============ -->
+<main id="view-symbols" class="hidden">
+  <div class="card wide">
+    <div class="row" style="flex-wrap:wrap">
+      <h2 style="margin:0">Symbols</h2><div class="spacer"></div>
+      <input type="text" id="sym-add" placeholder="add e.g. AVAX/USDT" style="width:160px">
+      <button id="sym-add-btn" class="ghost">Add</button>
+      <button id="sym-reload" class="ghost">Reload</button>
+    </div>
+    <div class="tbl-wrap" style="max-height:520px">
+      <table>
+        <thead><tr><th>Symbol</th><th>Status</th><th>Model</th><th>Trained</th><th>Trades</th>
+          <th>Win%</th><th>PF</th><th>Net PnL</th><th>Actions</th></tr></thead>
+        <tbody id="sym-rows"><tr><td colspan="9" class="flat">Loading…</td></tr></tbody>
+      </table>
+    </div>
+    <div class="sym" style="margin-top:8px;font-size:11.5px"><b>Set active</b> switches the traded symbol
+      (saved to config). <b>Train / WF / HO</b> run for that symbol and open the live log in
+      Settings &amp; Training. Stats are realized trades from past runs (all environments).</div>
+  </div>
 </main>
 
 <!-- ============ TRADES & ANALYTICS ============ -->
@@ -174,11 +199,7 @@
     <div class="row" style="flex-wrap:wrap">
       <h2 style="margin:0">Training</h2><div class="spacer"></div>
       <span class="sym">Target symbol</span>
-      <input type="text" id="job-symbol" list="dl-symbols" placeholder="config default" style="width:130px">
-      <datalist id="dl-symbols">
-        <option value="BTC/USDT"><option value="ETH/USDT"><option value="SOL/USDT"><option value="BNB/USDT">
-        <option value="XRP/USDT"><option value="ADA/USDT"><option value="DOGE/USDT"><option value="LTC/USDT">
-      </datalist>
+      <input type="text" id="job-symbol" placeholder="config default" style="width:130px">
       <span id="train-state" class="sym">idle</span>
       <button id="train-btn" class="primary">Train now</button>
     </div>
@@ -207,7 +228,7 @@ const fmt=(n,d=2)=>(n??0).toLocaleString(undefined,{minimumFractionDigits:d,maxi
 const sign=(n)=>n>0?"pos":n<0?"neg":"";
 
 /* ---------- view switching ---------- */
-const TABS=["monitor","trades","settings"];
+const TABS=["monitor","symbols","trades","settings"];
 function showTab(name){
   for(const t of TABS){
     $("view-"+t).classList.toggle("hidden",t!==name);
@@ -215,8 +236,10 @@ function showTab(name){
   }
   if(name==="settings"){loadConfig(); loadModel(); loadKeys(); pollTrain(true);}
   if(name==="trades"){refreshRunSelectors(); loadTrades();}
+  if(name==="symbols"){loadSymbols();}
 }
 $("tab-monitor").onclick=()=>showTab("monitor");
+$("tab-symbols").onclick=()=>showTab("symbols");
 $("tab-trades").onclick=()=>showTab("trades");
 $("tab-settings").onclick=()=>showTab("settings");
 
@@ -319,8 +342,8 @@ const SECTION_TITLE={exchange:"Exchange & market",data:"Data & simulation",
   execution:"Execution & costs",model:"Model",features:"Feature windows"};
 const SECTION_ORDER=["exchange","data","barriers","risk","strategy","execution","model","features"];
 const F={
-  "exchange.id":{label:"Exchange",ctl:"datalist",options:EXCHANGES,help:"ccxt exchange id"},
-  "exchange.symbol":{label:"Symbol",ctl:"datalist",options:SYMBOLS,help:"Market to trade"},
+  "exchange.id":{label:"Exchange",ctl:"select",options:EXCHANGES,help:"ccxt exchange id"},
+  "exchange.symbol":{label:"Symbol",ctl:"select",options:SYMBOLS,help:"Market to trade — manage all symbols in the Symbols tab"},
   "exchange.timeframe":{label:"Timeframe",ctl:"select",options:TIMEFRAMES,help:"Candle size — 4h recommended"},
   "data.history_days":{label:"History (days)",ctl:"int",min:30},
   "data.train_symbols":{label:"Pooled training symbols",ctl:"list",help:"Correlated symbols added to TRAINING only, e.g. ETH/USDT"},
@@ -678,6 +701,54 @@ $("t-csv").onclick=()=>{
   const lines=[cols.join(",")].concat(src.map(t=>cols.map(c=>t[c]??"").join(",")));
   const blob=new Blob([lines.join("\n")],{type:"text/csv"});
   const a=document.createElement("a"); a.href=URL.createObjectURL(blob); a.download="trades.csv"; a.click();};
+
+/* ---------- Symbols table ---------- */
+let SYMBOL_ADDED=[];
+async function loadSymbols(){
+  try{
+    const d=await fetch("/api/symbols").then(r=>r.json());
+    const rows=(d.symbols||[]).slice();
+    for(const a of SYMBOL_ADDED){if(!rows.some(r=>r.symbol===a))
+      rows.push({symbol:a,active:a===d.configured,has_model:false,n_trades:0,win_rate:0,net_pnl:0,profit_factor:0});}
+    $("sym-rows").innerHTML = rows.length ? rows.map(r=>{
+      const model=r.has_model
+        ? `<span style="color:${r.matches?'var(--green)':'var(--amber)'}">✓ ${r.model_timeframe||''}${r.matches?'':' (tf≠)'}</span>`
+        : `<span class="reason">—</span>`;
+      const when=r.trained_at?new Date(r.trained_at).toLocaleDateString():"—";
+      const pfv=r.profit_factor==null?"∞":fmt(r.profit_factor,2);
+      const act=r.active?`<span class="pill LONG">active</span>`:"";
+      return `<tr>
+        <td><b>${r.symbol}</b></td><td>${act}</td><td>${model}</td><td class="reason">${when}</td>
+        <td>${r.n_trades}</td><td>${fmt((r.win_rate||0)*100,1)}%</td><td>${pfv}</td>
+        <td class="${sign(r.net_pnl)}">$${fmt(r.net_pnl,2)}</td>
+        <td>
+          <button class="ghost btn-xs" data-act="active" data-sym="${r.symbol}" ${r.active?'disabled':''}>Set active</button>
+          <button class="primary btn-xs" data-act="train" data-sym="${r.symbol}">Train</button>
+          <button class="ghost btn-xs" data-act="walkforward" data-sym="${r.symbol}">WF</button>
+          <button class="ghost btn-xs" data-act="holdout" data-sym="${r.symbol}">HO</button>
+        </td></tr>`;
+    }).join("") : `<tr><td colspan="9" class="flat">No symbols.</td></tr>`;
+    $("sym-rows").querySelectorAll("button[data-act]").forEach(b=>
+      b.onclick=()=>symAction(b.dataset.act,b.dataset.sym));
+  }catch(e){$("sym-rows").innerHTML=`<tr><td colspan="9" class="flat">Could not load symbols.</td></tr>`;}
+}
+async function symAction(act,sym){
+  if(act==="active"){
+    await fetch("/api/config",{method:"POST",headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({exchange:{symbol:sym}})});
+    await loadSymbols(); loadModel(); return;
+  }
+  $("job-symbol").value=sym;
+  await fetch("/api/job",{method:"POST",headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({kind:act,args:["--symbol",sym]})});
+  showTab("settings");
+  if(act==="train"){$("train-state").textContent="starting…"; pollTrain(true);}
+  else{$("wf-state").textContent=`${act}: starting…`; pollJob(act,true);}
+}
+$("sym-add-btn").onclick=()=>{const v=$("sym-add").value.trim().toUpperCase();
+  if(v){if(!SYMBOL_ADDED.includes(v))SYMBOL_ADDED.push(v); $("sym-add").value=""; loadSymbols();}};
+$("sym-add").addEventListener("keydown",e=>{if(e.key==="Enter")$("sym-add-btn").click();});
+$("sym-reload").onclick=loadSymbols;
 
 /* ---------- init ---------- */
 refreshRunSelectors();

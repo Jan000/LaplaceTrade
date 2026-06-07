@@ -43,6 +43,48 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def get_state() -> JSONResponse:
         return JSONResponse(controller.state.snapshot())
 
+    _COMMON_SYMBOLS = ["BTC/USDT", "ETH/USDT", "SOL/USDT", "BNB/USDT",
+                       "XRP/USDT", "ADA/USDT", "DOGE/USDT", "LTC/USDT"]
+
+    @app.get("/api/symbols")
+    async def symbols() -> JSONResponse:
+        """Per-symbol model status + realized trade stats + active flag (Symbols table)."""
+        from cryptotrader.ml.registry import list_models, model_path_for, read_meta
+
+        s = app.state.settings
+        # DB trade stats per symbol.
+        summaries = await _read_store_all(app.state.settings, lambda st: st.symbol_summaries())
+        stats = {r["symbol"]: r for r in summaries}
+        # Models on disk.
+        models = {m["symbol"]: m for m in list_models() if m.get("symbol")}
+
+        names = list(dict.fromkeys(
+            [*_COMMON_SYMBOLS, *models.keys(), *stats.keys(), s.exchange.symbol]))
+        out = []
+        for sym in names:
+            meta = (models.get(sym) or {}).get("meta")
+            if meta is None:  # also resolve in case naming differs
+                meta = read_meta(model_path_for(sym))
+            st = stats.get(sym, {})
+            n = int(st.get("n_trades") or 0)
+            gw, gl = float(st.get("gross_win") or 0.0), float(st.get("gross_loss") or 0.0)
+            out.append({
+                "symbol": sym,
+                "active": sym == s.exchange.symbol,
+                "has_model": meta is not None,
+                "model_timeframe": (meta or {}).get("timeframe"),
+                "trained_at": (meta or {}).get("saved_at"),
+                "train_symbols": (meta or {}).get("train_symbols"),
+                "matches": bool(meta and meta.get("symbol") == sym
+                                and meta.get("timeframe") == s.exchange.timeframe),
+                "n_trades": n,
+                "win_rate": round((st.get("wins") or 0) / n, 4) if n else 0.0,
+                "net_pnl": round(float(st.get("net_pnl") or 0.0), 2),
+                "profit_factor": round(gw / gl, 3) if gl > 0 else (None if gw > 0 else 0.0),
+            })
+        return JSONResponse({"symbols": out, "configured": s.exchange.symbol,
+                             "configured_timeframe": s.exchange.timeframe})
+
     @app.get("/api/model")
     async def model_info() -> JSONResponse:
         """Which model the engine will load for the configured symbol, and whether it matches."""

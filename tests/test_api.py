@@ -74,3 +74,20 @@ def test_runs_keys_and_jobs(tmp_path, monkeypatch) -> None:
         status = client.get("/api/job/status?kind=walkforward").json()
         assert status["kind"] == "walkforward" and "running" in status
         assert client.post("/api/job", json={"kind": "bogus"}).status_code == 400
+
+
+def test_symbols_table(tmp_path, monkeypatch) -> None:
+    import cryptotrader.ml.registry as registry
+
+    monkeypatch.setattr(registry, "MODELS_DIR", tmp_path / "models")  # no models on disk
+    settings = Settings()
+    settings.persistence.db_path = tmp_path / "sym.sqlite"
+    app = create_app(settings)
+    with TestClient(app) as client:
+        d = client.get("/api/symbols").json()
+        assert d["configured"] == settings.exchange.symbol
+        syms = {r["symbol"]: r for r in d["symbols"]}
+        assert settings.exchange.symbol in syms
+        active = syms[settings.exchange.symbol]
+        assert active["active"] is True and active["has_model"] is False
+        assert active["n_trades"] == 0

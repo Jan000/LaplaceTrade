@@ -274,6 +274,19 @@ class TradeStore:
             rows = await cur.fetchall()
         return [dict(r) for r in rows]
 
+    async def symbol_summaries(self) -> list[dict[str, Any]]:
+        """Per-symbol realized trade stats across all runs (for the Symbols table)."""
+        async with self._conn.execute(
+            "SELECT symbol, COUNT(*) AS n_trades, "
+            "SUM(CASE WHEN net_pnl > 0 THEN 1 ELSE 0 END) AS wins, "
+            "SUM(net_pnl) AS net_pnl, "
+            "SUM(CASE WHEN net_pnl > 0 THEN net_pnl ELSE 0 END) AS gross_win, "
+            "SUM(CASE WHEN net_pnl < 0 THEN -net_pnl ELSE 0 END) AS gross_loss "
+            "FROM trades GROUP BY symbol"
+        ) as cur:
+            rows = await cur.fetchall()
+        return [dict(r) for r in rows]
+
     async def get_all_trades(
         self, limit: int = 10000, environment: str | None = None
     ) -> list[dict[str, Any]]:
