@@ -17,6 +17,14 @@ exchange:
 data:
   history_days: 730       # how much history to pull for backtests
   cache_dir: .cache/ohlcv
+  # Simulation replays REAL data (accelerated) — far more meaningful than a random walk.
+  # Default = the held-out slice train_model.py writes (the model never saw it = honest
+  # out-of-sample). If that file is absent it falls back to the last `sim_days` of real
+  # market data (note: that window likely OVERLAPS training -> in-sample/optimistic; use
+  # the Validation panel's walk-forward/holdout for the rigorous edge check).
+  replay_file: models/holdout.parquet
+  sim_source: auto        # auto | real | synthetic (synthetic = force offline)
+  sim_days: 90
   # Pool ETH into the TRAINING set (BTC is still what we trade/test). ETH is the most
   # BTC-correlated major, so it roughly doubles the training data with relevant dynamics
   # and fights overfitting on the small 4h history — lifting the walk-forward from

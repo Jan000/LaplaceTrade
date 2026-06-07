@@ -71,7 +71,7 @@ class EngineController:
                 environment = "live" if real_orders else "paper"
                 warmup_bars = await self._fetch_warmup(feature_engine)
             else:
-                ohlcv = self._simulation_ohlcv()
+                ohlcv = await self._simulation_ohlcv()
                 data_handler = ReplayDataHandler(ohlcv, delay=0.01)
                 execution = PaperExecutionHandler(self.settings.execution)
                 self.settings.mode = RunMode.BACKTEST
@@ -192,12 +192,43 @@ class EngineController:
         logger.info("No trained model configured; using momentum baseline.")
         return MomentumBaselinePredictor()
 
-    def _simulation_ohlcv(self):
-        """Real held-out data for replay if configured, else synthetic."""
+    async def _simulation_ohlcv(self):
+        """OHLCV for accelerated simulation replay.
+
+        Precedence: the configured ``replay_file`` (e.g. the held-out OOS slice that
+        ``train_model.py`` writes — the honest, model-never-saw-it data) → real recent
+        ``sim_days`` of market data → synthetic random walk (offline fallback). Replaying
+        REAL data is far more meaningful than a random walk on which no edge can exist.
+        """
+        import pandas as pd
+
         replay = self.settings.data.replay_file
         if replay is not None and Path(replay).exists():
-            import pandas as pd
-
-            logger.info("Replaying real data from %s", replay)
+            logger.info("Simulation: replaying held-out real data from %s", replay)
             return pd.read_parquet(replay)
+
+        if self.settings.data.sim_source != "synthetic":
+            from datetime import datetime, timedelta, timezone
+
+            feed = MarketDataFeed(
+                exchange_id=self.settings.exchange.id,
+                symbol=self.settings.exchange.symbol,
+                timeframe=self.settings.exchange.timeframe,
+                cache_dir=self.settings.data.cache_dir,
+            )
+            try:
+                start = datetime.now(tz=timezone.utc) - timedelta(
+                    days=self.settings.data.sim_days
+                )
+                df = await feed.fetch_history(start)
+                if not df.empty:
+                    logger.info("Simulation: replaying %d real bars (%d days)",
+                                len(df), self.settings.data.sim_days)
+                    return df
+            except Exception:
+                logger.exception("Simulation real-data fetch failed; using synthetic.")
+            finally:
+                await feed.close()
+
+        logger.info("Simulation: using synthetic data (offline / forced).")
         return make_synthetic_ohlcv(n=6000, seed=7)

@@ -49,6 +49,11 @@ class DataConfig(BaseModel):
     history_days: int = 365
     cache_dir: Path = Path(".cache/ohlcv")
     replay_file: Path | None = None
+    # Simulation source (accelerated replay through the live engine). Precedence:
+    # replay_file (e.g. the held-out OOS slice train_model writes) -> real recent
+    # `sim_days` of data -> synthetic (offline fallback). "synthetic" forces offline.
+    sim_source: str = "auto"   # auto | real | synthetic
+    sim_days: int = 90         # days of real data to replay when no replay_file is set
     # Extra symbols pooled into the TRAINING set (the primary exchange.symbol is still
     # what gets traded/tested). More + more diverse data fights overfitting on the small
     # higher-timeframe history. Empty list = single-symbol behaviour.
