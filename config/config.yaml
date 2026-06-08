@@ -1,45 +1,24 @@
-# config/config.yaml
-# Central runtime configuration. Loaded by cryptotrader.config.Settings.
-# Secrets (API keys) should come from environment variables, NOT this file.
-
-mode: backtest            # backtest | live
-
+mode: backtest
 exchange:
-  id: binance             # any ccxt-supported id (binance, bybit, ...)
+  id: binance
   symbol: BTC/USDT
-  timeframe: 4h           # 4h: far less cost drag than 1h. Cost is a fixed ~10bps of
-                          # notional per trade regardless of timeframe, but the ATR (hence
-                          # the move we harvest) is much larger on 4h, so the breakeven
-                          # win-rate drops and the marginal edge survives costs. Walk-forward
-                          # flips from -45% (1h) to positive on 4h.
-  # api_key / api_secret are read from env: CT_EXCHANGE__API_KEY, CT_EXCHANGE__API_SECRET
-
+  timeframe: 4h
 data:
-  history_days: 730       # how much history to pull for backtests
+  history_days: 730
   cache_dir: .cache/ohlcv
-  # Simulation replays REAL data (accelerated) — far more meaningful than a random walk.
-  # Source precedence: replay_file (explicit override, below) -> the per-symbol held-out
-  # slice train_model.py writes (models/holdout_<SYMBOL>.parquet; the model never saw it
-  # = honest out-of-sample) -> last `sim_days` of real market data (note: likely OVERLAPS
-  # training -> optimistic; use the Validation panel for the rigorous check) -> synthetic.
-  # replay_file: models/holdout_BTCUSDT.parquet   # uncomment to pin a specific slice
-  sim_source: auto        # auto | real | synthetic (synthetic = force offline)
+  sim_source: auto
   sim_days: 90
-  # Pool ETH into the TRAINING set (BTC is still what we trade/test). ETH is the most
-  # BTC-correlated major, so it roughly doubles the training data with relevant dynamics
-  # and fights overfitting on the small 4h history — lifting the walk-forward from
-  # +8.2% to +16.1% / PF 1.45 / 4-5 folds, ROBUST. Adding SOL instead HURT (regime noise),
-  # so keep the pool to closely-correlated assets.
   train_symbols:
-    - ETH/USDT
-  # replay_file: models/holdout.parquet   # dashboard sim replays this real slice
-
-# Every indicator window is tunable here (all in bars). Any field can also be
-# overridden via env: e.g. CT_FEATURES__RSI_SLOW=21
+  - ETH/USDT
+  trade_symbols:
+  - BTC/USDT
 features:
   atr_period: 14
   vwap_window: 60
-  momentum_windows: [3, 5, 15]
+  momentum_windows:
+  - 3
+  - 5
+  - 15
   extra_momentum: 30
   volume_spike_window: 30
   zscore_window: 60
@@ -57,16 +36,16 @@ features:
   parkinson: 20
   obv_z: 30
   amihud: 20
-  fracdiff_d: 0.4         # fractional differentiation order (0..1)
+  fracdiff_d: 0.4
   fracdiff_window: 60
-
-# LightGBM hyperparameters + training controls. Tune freely (or via env, e.g.
-# CT_MODEL__N_ESTIMATORS=800 CT_MODEL__LEARNING_RATE=0.02).
+  # Orthogonal market-context modules. The COMBINATION passed a 2-structure walk-forward
+  # robustness check (both windows positive, profit-factor up in both: 1.39->1.69 and
+  # 1.32->1.49) — unlike cross-asset/HTF/taker-flow which overfit. Funding = free Binance
+  # USDⓈ-M perp positioning; breadth = how the alt basket moves. Retrain symbols to use them.
+  use_funding: true        # perpetual funding rate (positioning / sentiment)
+  use_breadth: true        # market breadth: avg basket return, % positive, BTC vs market
+  # (use_open_interest stays off: Binance caps OI history at ~30 days -> flat for training.)
 model:
-  # Heavily regularised on purpose. Crypto bars are noisy and the 4h training set is
-  # only a few thousand rows; the old high-capacity defaults (num_leaves 63, 400 trees)
-  # fit the noise and collapsed out-of-sample (train looked fine, every OOS fold lost).
-  # Shallower trees + larger leaves + stronger L2 generalise materially better.
   n_estimators: 250
   learning_rate: 0.02
   num_leaves: 15
@@ -75,80 +54,49 @@ model:
   subsample: 0.8
   colsample_bytree: 0.6
   reg_lambda: 5.0
-  class_weight: null      # null = off; "balanced" upweights directional classes (A/B test it)
-  random_state: 42        # fix the seed so runs are reproducible & comparable
-  ensemble_size: 7        # average 7 seed-varied models — cancels seed/sampling variance,
-                          # the dominant noise on a ~2-3k-row training set. Lifts the 4h
-                          # walk-forward to +8.2% / PF 1.24 / 4-5 of 5 folds, ROBUST.
-  bagging_freq: 1         # >0 so `subsample` actually row-bags (it is a no-op at 0) — adds
-                          # both regularisation and the diversity the ensemble needs.
-  eval_fraction: 0.2      # validation slice inside the training data
-  # Anti-overfit pruning. These 12 features had the lowest gain-importance averaged
-  # across all 5 walk-forward folds (measured independently of returns). Dropping them
-  # makes every fold positive (5/5, vs 4/5 with the full set) at the cost of a little
-  # peak return — a better risk-adjusted, generalisation-friendly profile. Calendar
-  # features (hour_*) carry little on 4h (only 6 bars/day); the rest are noisy micro.
+  class_weight: null
+  random_state: 42
+  ensemble_size: 7
+  bagging_freq: 1
+  eval_fraction: 0.2
   drop_features:
-    - hour_cos
-    - hour_sin
-    - up_streak
-    - ofi_z
-    - ret_1
-    - obv_z
-    - clv
-    - body_pct
-    - mom_accel
-    - lower_wick
-    - rsi
-    - vol_z
-  test_fraction: 0.25     # held-out slice for the final evaluation/backtest
-  use_meta_labeling: false  # OFF. The meta P(win) carried no discriminative power here (a
-                            # higher confidence threshold did not raise the realised win-rate),
-                            # so it only added noise + a refit distribution-shift and filtered
-                            # out good trades. Disabling it flipped the 4h walk-forward from
-                            # +2.9% / MIXED to +10.6% / ROBUST (4/5 folds, PF 1.32). The EV gate
-                            # then uses the primary's own class probability as P(win).
-
+  - hour_cos
+  - hour_sin
+  - up_streak
+  - ofi_z
+  - ret_1
+  - obv_z
+  - clv
+  - body_pct
+  - mom_accel
+  - lower_wick
+  - rsi
+  - vol_z
+  test_fraction: 0.25
+  use_meta_labeling: false
 risk:
   account_equity: 10000.0
-  risk_per_trade: 0.005   # 0.5 % of equity risked per trade
-  atr_stop_mult: 2.0      # (legacy) hard stop multiple; exits now use barriers
-  atr_trail_mult: 1.5     # (legacy) trailing distance; exits now use barriers
+  risk_per_trade: 0.005
+  atr_stop_mult: 2.0
+  atr_trail_mult: 1.5
   max_open_positions: 1
-  # --- Cost control ---
-  max_leverage: 1.0       # cap notional at 1x equity -> fees stay proportional
-  cooldown_bars: 3        # wait N bars after a trade before re-entering
-  # Expected-value entry gate: trade only if P(win)*tp-(1-P(win))*sl-cost > min_ev.
-  # Self-calibrates to fees (no cost-coupling). Needs meta-labeling for a real P(win).
+  max_leverage: 1.0
+  cooldown_bars: 3
   use_ev_filter: true
   min_expected_value: 0.0
-  min_edge_cost_ratio: 8.0  # legacy fallback, only used when use_ev_filter=false
-
+  min_edge_cost_ratio: 8.0
 execution:
-  taker_fee: 0.0004       # 4 bps (Binance taker); use maker/VIP fees if you have them
-  slippage_bps: 1.0       # assumed slippage in basis points per fill
-
+  taker_fee: 0.0004
+  slippage_bps: 1.0
 strategy:
-  long_threshold: 0.50    # permissive: the EV gate is now the real filter
-  short_threshold: 0.50
+  long_threshold: 0.5
+  short_threshold: 0.5
   allow_short: true
-  # model_path: (unset) — the engine loads the PER-SYMBOL model models/model_<SYMBOL>.pkl
-  # written by training, and falls back to the momentum baseline if none exists. Set this
-  # only to pin one specific model file (advanced/legacy single-model use).
-
-# Triple barriers — shared by the training labels AND the trade exits, so the
-# backtest/live engine harvests exactly what the model was trained to predict.
 barriers:
-  # Two SEPARATE barrier sets (see BarrierConfig docstring):
-  #  * trade exits below — asymmetric 2:1 reward:risk (let winners run, cut losers).
-  #  * label barriers     — SYMMETRIC, so the direction labels are unbiased. An
-  #    asymmetric tp/sl makes the nearer barrier far easier to touch, which biased
-  #    the labels (and the model) toward the short side and bled badly in the uptrend.
-  tp_mult: 2.0            # take-profit distance in ATR units (trade exit)
-  sl_mult: 1.0            # stop-loss distance in ATR units (trade exit)
-  horizon: 18             # time-based exit after this many bars
-  label_tp_mult: 1.5      # labelling barrier (symmetric)
-  label_sl_mult: 1.5      # labelling barrier (symmetric)
-
+  tp_mult: 2.0
+  sl_mult: 1.0
+  horizon: 18
+  label_tp_mult: 1.5
+  label_sl_mult: 1.5
 persistence:
   db_path: data/cryptotrader.sqlite
