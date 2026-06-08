@@ -128,6 +128,8 @@ class MicrostructureFeatureEngine(FeatureCalculator):
         htf_ema: int = 10,
         htf_rsi: int = 14,
         htf_lookback_bars: int = 200,
+        use_breadth: bool = False,
+        breadth_symbols: list[str] | None = None,
     ) -> None:
         self.atr_period = atr_period
         self.vwap_window = vwap_window
@@ -163,6 +165,8 @@ class MicrostructureFeatureEngine(FeatureCalculator):
         self.htf_ema = htf_ema
         self.htf_rsi = htf_rsi
         self.htf_lookback_bars = htf_lookback_bars
+        self.use_breadth = use_breadth
+        self.breadth_symbols = breadth_symbols or ["ETH/USDT", "SOL/USDT", "BNB/USDT", "XRP/USDT"]
 
         self._warmup = max(
             atr_period, vwap_window, volume_spike_window, zscore_window,
@@ -353,10 +357,24 @@ class MicrostructureFeatureEngine(FeatureCalculator):
                 for col in ("htf_trend", "htf_ret", "htf_rsi"):
                     feats[col] = zero
 
+        # --- Market breadth: how the broader basket moves this bar (orthogonal to BTC TA).
+        # breadth columns are merged by sources.enrich_ohlcv (same-bar -> no look-ahead).
+        if self.use_breadth:
+            if "breadth_ret" in cols:
+                br = ohlcv["breadth_ret"]
+                feats["breadth_ret"] = br                                # avg basket return
+                feats["breadth_pos"] = ohlcv.get("breadth_pos", 0.5) - 0.5  # % positive, centred
+                feats["breadth_rel"] = log_ret - br                       # BTC vs the market
+            else:
+                feats["breadth_ret"] = zero
+                feats["breadth_pos"] = zero
+                feats["breadth_rel"] = zero
+
         for _ext in ("taker_buy_ratio", "taker_flow_z", "trade_intensity_z",
                      "avg_trade_size_z", "funding_rate", "funding_z", "oi_change",
                      "oi_z", "cross_ret", "cross_corr", "rel_strength",
-                     "htf_trend", "htf_ret", "htf_rsi"):
+                     "htf_trend", "htf_ret", "htf_rsi",
+                     "breadth_ret", "breadth_pos", "breadth_rel"):
             if _ext in feats:
                 feats[_ext] = feats[_ext].fillna(0.0)
 
@@ -412,4 +430,6 @@ class MicrostructureFeatureEngine(FeatureCalculator):
             names += ["cross_ret", "cross_corr", "rel_strength"]
         if self.use_htf:
             names += ["htf_trend", "htf_ret", "htf_rsi"]
+        if self.use_breadth:
+            names += ["breadth_ret", "breadth_pos", "breadth_rel"]
         return names

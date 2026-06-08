@@ -140,7 +140,8 @@ def _diag_misalign(name: str, src_index, out_index) -> None:
 async def enrich_ohlcv(settings, ohlcv: pd.DataFrame, start: datetime, feed) -> pd.DataFrame:
     """Merge the enabled optional sources onto ``ohlcv`` (best-effort, fail-safe)."""
     f = settings.features
-    if not (f.use_taker_flow or f.use_funding or f.use_open_interest or f.use_cross_asset):
+    if not (f.use_taker_flow or f.use_funding or f.use_open_interest
+            or f.use_cross_asset or f.use_breadth):
         return ohlcv
     if ohlcv.empty:
         return ohlcv
@@ -201,5 +202,34 @@ async def enrich_ohlcv(settings, ohlcv: pd.DataFrame, start: datetime, feed) -> 
                 logger.info("Merged cross-asset %s (%d rows)", f.cross_symbol, len(cross))
         except Exception:
             logger.warning("cross_asset source unavailable; skipping.", exc_info=True)
+
+    if f.use_breadth:
+        try:
+            import numpy as np
+
+            from cryptotrader.data.ingestion import MarketDataFeed
+
+            rets = []
+            for sym in f.breadth_symbols:
+                bf = MarketDataFeed(exchange_id=settings.exchange.id, symbol=sym,
+                                    timeframe=tf, cache_dir=settings.data.cache_dir)
+                try:
+                    d = await bf.fetch_history(start)
+                finally:
+                    await bf.close()
+                if d.empty:
+                    continue
+                r = np.log(d["close"] / d["close"].shift(1))
+                r.index = _to_utc(r.index)
+                rets.append(_exact_or_nearest(r, out.index))
+            if rets:
+                R = pd.concat(rets, axis=1)
+                # Same-bar aggregates (known at bar close; the label is forward -> no leak).
+                out["breadth_ret"] = R.mean(axis=1)
+                cnt = R.notna().sum(axis=1)
+                out["breadth_pos"] = (R > 0).sum(axis=1) / cnt.replace(0, np.nan)
+                logger.info("Merged market breadth over %d symbols", len(rets))
+        except Exception:
+            logger.warning("breadth source unavailable; skipping.", exc_info=True)
 
     return out

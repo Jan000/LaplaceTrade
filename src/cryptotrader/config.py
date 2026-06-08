@@ -95,6 +95,11 @@ class FeatureConfig(BaseModel):
     htf_ema: int = 10                # EMA span (in HTF bars) for the HTF trend regime
     htf_rsi: int = 14                # RSI period (in HTF bars)
     htf_lookback_bars: int = 200     # warmup (base bars) needed to form the HTF features
+    # Market breadth: how the broader crypto basket is moving this bar (orthogonal to BTC TA).
+    use_breadth: bool = False
+    breadth_symbols: list[str] = Field(
+        default_factory=lambda: ["ETH/USDT", "SOL/USDT", "BNB/USDT", "XRP/USDT"]
+    )
     # --- Optional extra data sources (all opt-in; features computed only when
     # the source columns are present in the OHLCV frame) ---
     use_taker_flow: bool = False     # taker buy/sell volume + trade count (Binance klines)

@@ -56,6 +56,8 @@
   .stat .k{color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.4px;}
   .stat .v{font-size:18px;font-weight:600;margin-top:4px;}
   button.btn-xs{padding:3px 8px;font-size:11px;margin:0 1px;}
+  .featrow{display:flex;gap:9px;align-items:flex-start;padding:8px 2px;border-bottom:1px solid var(--line);font-size:12.5px;}
+  .featrow input{margin-top:2px;transform:scale(1.2);} .featrow .on{color:var(--green);} .featrow .off{color:var(--muted);}
   #sym-rows td{white-space:nowrap;}
   #t-table th,#sym-table th[data-k]{cursor:pointer;user-select:none;white-space:nowrap;}
   #t-table th:hover{color:var(--txt);}
@@ -219,6 +221,16 @@
     <div id="cfg-form" class="cfg-grid"></div>
   </div>
 
+  <!-- 2b) Optional feature modules -->
+  <div class="card wide">
+    <div class="row"><h2 style="margin:0">Feature modules</h2><div class="spacer"></div>
+      <span id="feat-msg" class="sym"></span></div>
+    <div id="feat-list"></div>
+    <div class="sym" style="font-size:11.5px;margin-top:8px">Each module adds inputs to the model.
+      Toggling one changes the input set — <b>retrain</b> the affected symbol(s) afterwards.
+      Note: in tests most extra modules <b>overfit</b> the small 4h set — enable only what validates ROBUST.</div>
+  </div>
+
   <!-- 3) API keys (only for real trading) -->
   <div class="card wide">
     <div class="row">
@@ -249,7 +261,7 @@ function showTab(name){
     $("view-"+t).classList.toggle("hidden",t!==name);
     $("tab-"+t).className=(t===name)?"primary":"ghost";
   }
-  if(name==="settings"){loadConfig(); loadModel(); loadKeys();}
+  if(name==="settings"){loadConfig(); loadModel(); loadKeys(); loadFeatures();}
   if(name==="trades"){refreshRunSelectors(); loadTrades();}
   if(name==="symbols"){loadSymbols(); refreshJobs();}
 }
@@ -511,6 +523,43 @@ async function loadModel(){   // detailed status of the CONFIGURED symbol, shown
         `(${m.model_path}, trained ${when})${pool}`;
     }
   }catch(e){$("model-status").textContent="Model: (status unavailable)";}
+}
+
+/* ---------- optional feature modules (toggle list) ---------- */
+const FEATURE_MODULES=[
+  {key:"features.use_breadth", label:"Market breadth",
+   desc:"Average return & % positive of an alt basket (breadth_symbols) + BTC vs market — how the whole market moves. NEW."},
+  {key:"features.use_cross_asset", label:"Cross-asset",
+   desc:"Return / correlation / relative-strength vs one second symbol (cross_symbol)."},
+  {key:"features.use_htf", label:"Higher-timeframe context",
+   desc:"Daily trend / RSI / return mapped onto the bars (leak-free). Tested: didn't robustly help."},
+  {key:"features.use_taker_flow", label:"Taker order flow",
+   desc:"Aggressive taker buy/sell volume & trade count (Binance klines)."},
+  {key:"features.use_funding", label:"Funding rate",
+   desc:"Perpetual funding rate (positioning / sentiment). Needs a futures data feed."},
+  {key:"features.use_open_interest", label:"Open interest",
+   desc:"Open-interest change (positioning). Needs a futures data feed."},
+  {key:"strategy.trend_filter", label:"Trend filter (strategy)",
+   desc:"Only take signals that agree with the slow-EMA trend. Tested: didn't help."},
+];
+async function loadFeatures(){
+  try{const cfg=await fetch("/api/config").then(r=>r.json());
+    $("feat-list").innerHTML=FEATURE_MODULES.map(m=>{
+      const [sec,key]=m.key.split("."); const on=!!(cfg[sec]&&cfg[sec][key]);
+      return `<label class="featrow"><input type="checkbox" data-fkey="${m.key}" ${on?"checked":""}>
+        <span><b>${m.label}</b> <span class="${on?'on':'off'}">${on?'· on':'· off'}</span>
+        <span class="reason">— ${m.desc}</span></span></label>`;
+    }).join("");
+    $("feat-list").querySelectorAll("input[data-fkey]").forEach(c=>
+      c.onchange=()=>toggleFeature(c.dataset.fkey,c.checked));
+  }catch(e){$("feat-list").textContent="(unavailable)";}
+}
+async function toggleFeature(fkey,on){
+  const [sec,key]=fkey.split(".");
+  const r=await fetch("/api/config",{method:"POST",headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({[sec]:{[key]:on}})});
+  $("feat-msg").textContent=r.ok?"saved ✓ — retrain affected symbols to apply":"error saving";
+  loadFeatures(); loadModel();
 }
 
 /* ---------- jobs (concurrent training / walk-forward / holdout) ---------- */
