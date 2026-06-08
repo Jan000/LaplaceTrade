@@ -89,6 +89,12 @@ class FeatureConfig(BaseModel):
     fracdiff_d: float = 0.4
     fracdiff_window: int = 60
     trend_ema: int = 50              # slow EMA span (bars) for the regime/trend filter
+    # Higher-timeframe context features (e.g. daily trend/RSI/return fed into the 4h model).
+    use_htf: bool = False
+    htf_rule: str = "1D"             # pandas resample rule for the higher timeframe
+    htf_ema: int = 10                # EMA span (in HTF bars) for the HTF trend regime
+    htf_rsi: int = 14                # RSI period (in HTF bars)
+    htf_lookback_bars: int = 200     # warmup (base bars) needed to form the HTF features
     # --- Optional extra data sources (all opt-in; features computed only when
     # the source columns are present in the OHLCV frame) ---
     use_taker_flow: bool = False     # taker buy/sell volume + trade count (Binance klines)

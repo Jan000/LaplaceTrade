@@ -123,6 +123,11 @@ class MicrostructureFeatureEngine(FeatureCalculator):
         use_cross_asset: bool = False,
         cross_symbol: str = "ETH/USDT",
         cross_corr_window: int = 60,
+        use_htf: bool = False,
+        htf_rule: str = "1D",
+        htf_ema: int = 10,
+        htf_rsi: int = 14,
+        htf_lookback_bars: int = 200,
     ) -> None:
         self.atr_period = atr_period
         self.vwap_window = vwap_window
@@ -153,12 +158,18 @@ class MicrostructureFeatureEngine(FeatureCalculator):
         self.use_cross_asset = use_cross_asset
         self.cross_symbol = cross_symbol
         self.cross_corr_window = cross_corr_window
+        self.use_htf = use_htf
+        self.htf_rule = htf_rule
+        self.htf_ema = htf_ema
+        self.htf_rsi = htf_rsi
+        self.htf_lookback_bars = htf_lookback_bars
 
         self._warmup = max(
             atr_period, vwap_window, volume_spike_window, zscore_window,
             max(self.momentum_windows), extra_momentum, macd_slow, rsi_slow,
             bollinger_window, adx_period, donchian, parkinson, obv_z, amihud,
             fracdiff_window, cross_corr_window, trend_ema,
+            htf_lookback_bars if use_htf else 0,
         ) + 2
 
         self._names = self._build_feature_names()
@@ -321,9 +332,31 @@ class MicrostructureFeatureEngine(FeatureCalculator):
                 feats["cross_corr"] = zero
                 feats["rel_strength"] = zero
 
+        # --- Higher-timeframe context (e.g. daily trend/RSI/return on a 4h model).
+        # Aggregate the base bars to htf_rule, compute indicators on the HTF closes,
+        # SHIFT by one HTF bar (so a base bar only ever sees the last *completed* HTF
+        # candle — no look-ahead) and forward-fill onto the base index.
+        if self.use_htf and isinstance(ohlcv.index, pd.DatetimeIndex):
+            htf = ohlcv[["close"]].resample(self.htf_rule).agg({"close": "last"}).dropna()
+            if len(htf) > 2:
+                hc = htf["close"]
+                hema = hc.ewm(span=self.htf_ema, adjust=False).mean()
+                htf_feat = pd.DataFrame({
+                    "htf_trend": np.sign(hc - hema),                 # daily up/down regime
+                    "htf_ret": np.log(hc / hc.shift(1)),             # last completed daily return
+                    "htf_rsi": (_rsi(hc, self.htf_rsi) - 50.0) / 50.0,  # daily RSI, centred
+                }).shift(1)                                          # only completed HTF bars
+                aligned = htf_feat.reindex(ohlcv.index, method="ffill")
+                for col in ("htf_trend", "htf_ret", "htf_rsi"):
+                    feats[col] = aligned[col]
+            else:
+                for col in ("htf_trend", "htf_ret", "htf_rsi"):
+                    feats[col] = zero
+
         for _ext in ("taker_buy_ratio", "taker_flow_z", "trade_intensity_z",
                      "avg_trade_size_z", "funding_rate", "funding_z", "oi_change",
-                     "oi_z", "cross_ret", "cross_corr", "rel_strength"):
+                     "oi_z", "cross_ret", "cross_corr", "rel_strength",
+                     "htf_trend", "htf_ret", "htf_rsi"):
             if _ext in feats:
                 feats[_ext] = feats[_ext].fillna(0.0)
 
@@ -377,4 +410,6 @@ class MicrostructureFeatureEngine(FeatureCalculator):
             names += ["oi_change", "oi_z"]
         if self.use_cross_asset:
             names += ["cross_ret", "cross_corr", "rel_strength"]
+        if self.use_htf:
+            names += ["htf_trend", "htf_ret", "htf_rsi"]
         return names
