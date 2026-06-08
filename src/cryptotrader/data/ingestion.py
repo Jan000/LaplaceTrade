@@ -37,6 +37,7 @@ class MarketDataFeed:
         cache_dir: Path | None = Path(".cache/ohlcv"),
         api_key: str | None = None,
         api_secret: str | None = None,
+        default_type: str = "spot",
     ) -> None:
         self.exchange_id = exchange_id
         self.symbol = symbol
@@ -44,6 +45,7 @@ class MarketDataFeed:
         self.cache_dir = cache_dir
         self._api_key = api_key
         self._api_secret = api_secret
+        self.default_type = default_type  # "spot" | "future" (USDⓈ-M perps: funding/OI)
         self._tf_ms = _TIMEFRAME_MS.get(timeframe, 60_000)
         self._client: object | None = None
 
@@ -54,13 +56,16 @@ class MarketDataFeed:
         except ImportError as exc:  # pragma: no cover
             raise RuntimeError(f"{module_name} is required for live/network data.") from exc
         klass = getattr(module, self.exchange_id)
+        options: dict = {"defaultType": self.default_type}
+        if self.default_type == "spot":
+            options["fetchMarkets"] = ["spot"]  # faster market load; futures load all
         client = klass(
             {
                 "apiKey": self._api_key,
                 "secret": self._api_secret,
                 "enableRateLimit": True,
                 "timeout": 30_000,
-                "options": {"defaultType": "spot", "fetchMarkets": ["spot"]},
+                "options": options,
                 "aiohttp_trust_env": True,
             }
         )

@@ -169,21 +169,39 @@ async def enrich_ohlcv(settings, ohlcv: pd.DataFrame, start: datetime, feed) -> 
         except Exception:
             logger.warning("taker_flow source unavailable; skipping.", exc_info=True)
 
-    if f.use_funding:
-        try:
-            fr = await fetch_funding(client, symbol, start_ms)
-            out["funding_rate"] = _align_ffill(fr, out.index)
-            logger.info("Merged funding rate (%d points)", len(fr))
-        except Exception:
-            logger.warning("funding source unavailable; skipping.", exc_info=True)
+    # Funding & open interest are PERP (USDⓈ-M futures) endpoints — use a futures client.
+    if f.use_funding or f.use_open_interest:
+        from cryptotrader.data.ingestion import MarketDataFeed
 
-    if f.use_open_interest:
+        fut_feed = MarketDataFeed(
+            exchange_id=settings.exchange.id, symbol=symbol, timeframe=tf,
+            cache_dir=None, api_key=settings.exchange.api_key,
+            api_secret=settings.exchange.api_secret, default_type="future",
+        )
+        fut = fut_feed._make_client(pro=False)
+        fut_feed._client = fut
         try:
-            oi = await fetch_open_interest(client, symbol, tf, start_ms)
-            out["open_interest"] = _align_ffill(oi, out.index)
-            logger.info("Merged open interest (%d points)", len(oi))
-        except Exception:
-            logger.warning("open_interest source unavailable; skipping.", exc_info=True)
+            if f.use_funding:
+                try:
+                    fr = await fetch_funding(fut, symbol, start_ms)
+                    out["funding_rate"] = _align_ffill(fr, out.index)
+                    logger.info("Merged funding rate (%d points, %d aligned)",
+                                len(fr), int(out["funding_rate"].notna().sum()))
+                except Exception:
+                    logger.warning("funding source unavailable; skipping.", exc_info=True)
+            if f.use_open_interest:
+                try:
+                    # Binance caps OI history at ~30 days — only fetch within that window
+                    # (further back errors), so OI mainly helps live/recent, not 2y training.
+                    oi_start = max(start_ms, end_ms - 29 * 24 * 3_600_000)
+                    oi = await fetch_open_interest(fut, symbol, tf, oi_start)
+                    out["open_interest"] = _align_ffill(oi, out.index)
+                    logger.info("Merged open interest (%d points, %d aligned)",
+                                len(oi), int(out["open_interest"].notna().sum()))
+                except Exception:
+                    logger.warning("open_interest source unavailable; skipping.", exc_info=True)
+        finally:
+            await fut_feed.close()
 
     if f.use_cross_asset:
         try:

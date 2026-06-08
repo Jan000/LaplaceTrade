@@ -536,9 +536,9 @@ const FEATURE_MODULES=[
   {key:"features.use_taker_flow", label:"Taker order flow",
    desc:"Aggressive taker buy/sell volume & trade count (Binance klines)."},
   {key:"features.use_funding", label:"Funding rate",
-   desc:"Perpetual funding rate (positioning / sentiment). Needs a futures data feed."},
+   desc:"Perpetual funding rate (positioning / sentiment) — free Binance USDⓈ-M futures, full history."},
   {key:"features.use_open_interest", label:"Open interest",
-   desc:"Open-interest change (positioning). Needs a futures data feed."},
+   desc:"Open-interest change (positioning) — Binance futures, but history is capped at ~30 days (flat before that, so weak for training)."},
   {key:"strategy.trend_filter", label:"Trend filter (strategy)",
    desc:"Only take signals that agree with the slow-EMA trend. Tested: didn't help."},
 ];
