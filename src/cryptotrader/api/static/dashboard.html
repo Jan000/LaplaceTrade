@@ -73,6 +73,14 @@
     <div class="spacer"></div>
     <div class="controls">
       <select id="mode"><option value="simulation">Simulation</option><option value="live">Live data</option></select>
+      <select id="sim-window" title="Simulation: replay the held-out OOS slice, or accelerate-test the model on the last N days of real market data">
+        <option value="">Held-out (OOS)</option>
+        <option value="1">Last 24h</option>
+        <option value="7">Last 7 days</option>
+        <option value="14">Last 14 days</option>
+        <option value="30">Last 30 days</option>
+        <option value="90">Last 90 days</option>
+      </select>
       <span id="model-badge" class="sym hidden" style="font-size:12px"></span>
       <label id="real-wrap" class="hidden" title="Place REAL orders on the exchange (requires API keys). Paper fills otherwise.">
         <input type="checkbox" id="real-orders"><span style="color:var(--amber);font-size:12.5px">&nbsp;real orders</span>
@@ -343,7 +351,11 @@ async function loadHistory(){
 function syncModeUI(){const live=$("mode").value==="live";
   $("real-wrap").classList.toggle("hidden",!live);
   $("model-badge").classList.toggle("hidden",!live);
+  $("sim-window").classList.toggle("hidden",live);   // test-window presets only for simulation
   if(!live)$("real-orders").checked=false;
+  $("mode-label").textContent = live
+    ? "live — waits for the next bar to close (real-time)"
+    : "idle";
   refreshGate();}   // refresh badge + real-orders gating over the traded symbol set
 $("mode").onchange=syncModeUI;
 function setRunning(r){$("start").disabled=r;$("stop").disabled=!r;$("mode").disabled=r;
@@ -357,8 +369,10 @@ $("start").onclick=async()=>{
   if(real&&!confirm("Place REAL orders on the exchange with live funds? This is not a simulation.")) return;
   viewingRun=null; $("run-select").value="";   // a new run -> leave any historical view
   setRunning(true);
+  const win=$("sim-window").value;
+  const sim_days=($("mode").value==="simulation"&&win)?Number(win):null;
   try{const x=await fetch("/api/start",{method:"POST",headers:{"Content-Type":"application/json"},
-      body:JSON.stringify({mode:$("mode").value,real_orders:real})});
+      body:JSON.stringify({mode:$("mode").value,real_orders:real,sim_days})});
     if(!x.ok){const b=await x.json().catch(()=>({}));$("mode-label").textContent="error: "+(b.error||x.statusText);$("status-dot").className="dot error";setRunning(false);}}
   catch(e){$("mode-label").textContent="error: cannot reach server";setRunning(false);}};
 $("stop").onclick=async()=>{$("stop").disabled=true;await fetch("/api/stop",{method:"POST"});setRunning(false);};

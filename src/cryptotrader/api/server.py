@@ -24,6 +24,7 @@ _STATIC_DIR = Path(__file__).parent / "static"
 class StartRequest(BaseModel):
     mode: str = "simulation"          # "simulation" | "live"
     real_orders: bool = False         # place REAL ccxt orders (live mode only)
+    sim_days: int | None = None       # simulation: accelerated test on the last N days of real data
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -140,7 +141,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.post("/api/start")
     async def start(req: StartRequest) -> JSONResponse:
         try:
-            await controller.start(mode=req.mode, real_orders=req.real_orders)
+            await controller.start(mode=req.mode, real_orders=req.real_orders,
+                                   sim_days=req.sim_days)
         except Exception as exc:
             controller.state.status = "error"
             logger.exception("Failed to start engine")

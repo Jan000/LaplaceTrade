@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from cryptotrader.config import RunMode, Settings
@@ -62,8 +62,13 @@ class EngineController:
         syms = list(dict.fromkeys(self.settings.data.trade_symbols or []))
         return syms or [self.settings.exchange.symbol]
 
-    async def start(self, mode: str = "simulation", real_orders: bool = False) -> None:
-        """Start an engine per traded symbol (idempotent)."""
+    async def start(self, mode: str = "simulation", real_orders: bool = False,
+                    sim_days: int | None = None) -> None:
+        """Start an engine per traded symbol (idempotent).
+
+        ``sim_days`` (simulation only): replay the last N days of REAL data instead of the
+        held-out slice — a quick accelerated test of the model on recent market history.
+        """
         async with self._lock:
             if self.is_running:
                 return
@@ -92,17 +97,22 @@ class EngineController:
             self._combined_curve = []
 
             for sym in symbols:
-                await self._start_one(sym, mode, real_orders, equity_each, environment)
+                await self._start_one(sym, mode, real_orders, equity_each, environment, sim_days)
 
             logger.info("Started %d engine(s) in %s mode: %s",
                         len(self._engines), mode, ", ".join(symbols))
             self._publish_aggregate()
 
-    async def _start_one(self, symbol, mode, real_orders, equity_each, environment) -> None:
+    async def _start_one(self, symbol, mode, real_orders, equity_each, environment,
+                         sim_days=None) -> None:
         sub = self.settings.model_copy(deep=True)
         sub.exchange.symbol = symbol
         sub.risk.account_equity = equity_each
         sub.mode = RunMode.LIVE if mode == "live" else RunMode.BACKTEST
+        if sim_days:                       # quick "test on the last N days of real data"
+            sub.data.sim_days = sim_days
+            sub.data.replay_file = None
+            sub.data.sim_source = "recent"  # forces recent real window, skipping the holdout slice
 
         feature_engine = MicrostructureFeatureEngine(**sub.features.model_dump())
         predictor = self._build_predictor(sub)
@@ -282,8 +292,6 @@ class EngineController:
             api_key=settings.exchange.api_key, api_secret=settings.exchange.api_secret,
         )
         try:
-            from datetime import timedelta
-
             start = datetime.now(tz=timezone.utc) - timedelta(milliseconds=feed._tf_ms * (need + 5))
             hist = await feed.fetch_history(start, use_cache=False)
             if hist.empty:
@@ -305,6 +313,36 @@ class EngineController:
 
         from cryptotrader.ml.registry import holdout_path_for
 
+        # "recent": test the model on the last N days of real data. Fetch N days PLUS the
+        # feature warm-up lead-in, so warm-up bars (which never trade — features still NaN)
+        # are consumed first and all trades fall inside the requested window.
+        if settings.data.sim_source == "recent":
+            import math
+
+            from cryptotrader.data.ingestion import _TIMEFRAME_MS
+
+            tf_ms = _TIMEFRAME_MS.get(settings.exchange.timeframe, 4 * 3_600_000)
+            warmup = MicrostructureFeatureEngine(**settings.features.model_dump()).warmup
+            warmup_days = math.ceil(warmup * tf_ms / 86_400_000) + 2
+            feed = MarketDataFeed(
+                exchange_id=settings.exchange.id, symbol=settings.exchange.symbol,
+                timeframe=settings.exchange.timeframe, cache_dir=settings.data.cache_dir,
+            )
+            try:
+                start = datetime.now(tz=timezone.utc) - timedelta(
+                    days=settings.data.sim_days + warmup_days)
+                df = await feed.fetch_history(start)
+                logger.info("Simulation: replaying last %d days of %s (+%d warm-up days, %d bars)",
+                            settings.data.sim_days, settings.exchange.symbol, warmup_days, len(df))
+                if not df.empty:
+                    return df
+            except Exception:
+                logger.exception("Simulation recent-window fetch failed for %s; using synthetic.",
+                                 settings.exchange.symbol)
+            finally:
+                await feed.close()
+            return make_synthetic_ohlcv(n=6000, seed=7)
+
         replay = settings.data.replay_file
         if replay is not None and Path(replay).exists():
             return pd.read_parquet(replay)
@@ -318,8 +356,6 @@ class EngineController:
                 timeframe=settings.exchange.timeframe, cache_dir=settings.data.cache_dir,
             )
             try:
-                from datetime import timedelta
-
                 start = datetime.now(tz=timezone.utc) - timedelta(days=settings.data.sim_days)
                 df = await feed.fetch_history(start)
                 if not df.empty:
