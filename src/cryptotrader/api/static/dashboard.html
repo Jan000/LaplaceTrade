@@ -123,6 +123,7 @@
       <input type="text" id="sym-add" placeholder="add e.g. AVAX/USDT" style="width:160px">
       <button id="sym-add-btn" class="ghost">Add</button>
       <button id="sym-reload" class="ghost">Reload</button>
+      <button id="sym-train-all" class="primary" title="Train + walk-forward + holdout for every symbol (max 2 at a time)">Train + test all</button>
     </div>
     <div class="tbl-wrap" style="max-height:540px">
       <table id="sym-table">
@@ -565,19 +566,58 @@ async function toggleFeature(fkey,on){
 /* ---------- jobs (concurrent training / walk-forward / holdout) ---------- */
 let JOBS=[], JOB_OPEN={}, jobsTimer=null, prevRunning=0, _jobsSig="";
 const cssid=k=>k.replace(/[^a-zA-Z0-9]/g,"_");
-async function startJobFor(kind,symbol){
+const STAGES=["train","walkforward","holdout"];        // a full "train + test" pipeline
+const STAGE_LABEL={train:"training",walkforward:"walk-forward",holdout:"holdout"};
+let PIPELINE={}, PIPE_QUEUE=[], PIPE_CAP=2;             // per-symbol sequential; capped concurrency
+async function postJob(kind,symbol){
   await fetch("/api/job",{method:"POST",headers:{"Content-Type":"application/json"},
     body:JSON.stringify({kind,symbol})});
-  JOB_OPEN[`${kind}:${symbol||"config"}`]=true;   // auto-open its log
-  refreshJobs();
+  JOB_OPEN[`${kind}:${symbol||"config"}`]=true;        // auto-open its log
+}
+async function startJobFor(kind,symbol){ await postJob(kind,symbol); refreshJobs(); }
+/* One-click full pipeline: train -> walk-forward -> holdout for a symbol (and for all). */
+function startPipeline(sym){ PIPELINE[sym]={remaining:STAGES.slice(),active:null,seen:false}; refreshJobs(); }
+function startPipelineAll(){
+  PIPE_QUEUE=SYM_ROWS.map(r=>r.symbol).filter(s=>!PIPELINE[s]);
+  fillPipelines(); refreshJobs();
+}
+function fillPipelines(){
+  while(Object.keys(PIPELINE).length<PIPE_CAP && PIPE_QUEUE.length){
+    const s=PIPE_QUEUE.shift();
+    if(!PIPELINE[s])PIPELINE[s]={remaining:STAGES.slice(),active:null,seen:false};
+  }
+}
+function pipelinesActive(){ return PIPE_QUEUE.length>0 || Object.keys(PIPELINE).length>0; }
+function advancePipelines(){            // chain stages per symbol; returns true if one (re)started
+  let started=false;
+  for(const sym of Object.keys(PIPELINE)){
+    const p=PIPELINE[sym];
+    if(p.active){
+      const job=JOBS.find(j=>j.symbol===sym && j.kind===p.active);
+      if(!job) continue;                                       // just posted, not registered yet
+      if(job.running){ p.seen=true; continue; }                // stage in progress
+      if(job.status==="failed"){ delete PIPELINE[sym]; continue; }  // abort the pipeline
+      if(job.status==="done" && p.seen){ p.remaining.shift(); p.active=null; p.seen=false; }
+      else continue;                                           // stale 'done' from before -> wait
+    }
+    if(!p.active){
+      if(!p.remaining.length){ delete PIPELINE[sym]; continue; }    // pipeline complete
+      p.active=p.remaining[0]; postJob(p.active,sym); started=true;
+    }
+  }
+  fillPipelines();
+  return started;
 }
 async function refreshJobs(){
   try{const d=await fetch("/api/jobs").then(r=>r.json()); JOBS=d.jobs||[];}catch(e){JOBS=[];}
-  renderJobs();
   const running=JOBS.filter(j=>j.running).length;
-  if(running===0 && prevRunning>0){ loadSymbols(); refreshGate(); loadModel(); } // jobs done -> stats update
+  const started=advancePipelines();
+  renderJobs(); updateSymbolProgress();
+  if(running===0 && prevRunning>0 && !pipelinesActive()){ loadSymbols(); refreshGate(); loadModel(); }
   prevRunning=running;
-  const need = running>0 || Object.keys(JOB_OPEN).some(k=>JOB_OPEN[k]);
+  // Poll only while something is actually running (or a pipeline is mid-flight). A finished
+  // job's open log is static, so we STOP hammering /api/job/log once everything is done.
+  const need = running>0 || started || pipelinesActive();
   clearInterval(jobsTimer); jobsTimer = need ? setInterval(refreshJobs,2000) : null;
 }
 /* Only rebuild the list DOM when the job set / status / open-state changes; otherwise
@@ -617,6 +657,20 @@ async function loadJobLog(key){
       if(atBottom)el.scrollTop=el.scrollHeight;          // keep pinned to bottom if it was
     }
   }catch(e){}
+}
+/* Live per-symbol progress in the upper table (running stage / pipeline position / queued). */
+function updateSymbolProgress(){
+  if(typeof SYM_ROWS==="undefined" || !SYM_ROWS) return;
+  SYM_ROWS.forEach(r=>{
+    const el=document.getElementById("symstat-"+cssid(r.symbol)); if(!el) return;
+    const job=JOBS.find(j=>j.symbol===r.symbol && j.running);
+    if(job){
+      const pos=PIPELINE[r.symbol]?` (${STAGES.indexOf(job.kind)+1}/${STAGES.length})`:"";
+      el.innerHTML=`<span style="color:var(--accent)">⏳ ${STAGE_LABEL[job.kind]||job.kind}…${pos}</span>`;
+    }else if(PIPELINE[r.symbol] || PIPE_QUEUE.includes(r.symbol)){
+      el.innerHTML=`<span class="reason">⏳ queued…</span>`;
+    }
+  });
 }
 $("jobs-reload").onclick=refreshJobs;
 $("goto-symbols").onclick=()=>showTab("symbols");
@@ -849,13 +903,14 @@ function renderSymbols(){
     return `<tr>
       <td><b>${r.symbol}</b></td>
       <td><input type="checkbox" data-trade="${r.symbol}" ${r.trade?'checked':''}></td>
-      <td class="reason">${r.has_model?(r.matches?'ready':'tf≠'):'no model'}</td>
+      <td class="reason" id="symstat-${cssid(r.symbol)}">${r.has_model?(r.matches?'ready':'tf≠'):'no model'}</td>
       <td>${model}</td><td class="reason">${when}</td>
       <td>${r.n_trades}</td><td>${fmt((r.win_rate||0)*100,1)}%</td><td>${pfv}</td><td>${eff}</td>
       <td class="${sign(r.net_pnl)}">$${fmt(r.net_pnl,2)}</td>
       <td>${valdot(r.walkforward)}</td><td>${valdot(r.holdout)}</td>
       <td style="white-space:nowrap">
-        <button class="primary btn-xs" data-act="train" data-sym="${r.symbol}">Train</button>
+        <button class="primary btn-xs" data-act="pipeline" data-sym="${r.symbol}" title="Train + walk-forward + holdout">T+T</button>
+        <button class="ghost btn-xs" data-act="train" data-sym="${r.symbol}">Train</button>
         <button class="ghost btn-xs" data-act="walkforward" data-sym="${r.symbol}">WF</button>
         <button class="ghost btn-xs" data-act="holdout" data-sym="${r.symbol}">HO</button>
       </td></tr>`;
@@ -874,13 +929,16 @@ async function toggleTrade(sym,on){
     body:JSON.stringify({data:{trade_symbols:TRADE_SET}})});
   refreshGate();
 }
-function symAction(act,sym){ startJobFor(act,sym); }   // start job; no navigation, log shows in Jobs panel
+function symAction(act,sym){ act==="pipeline" ? startPipeline(sym) : startJobFor(act,sym); }
 document.querySelectorAll("#sym-table th[data-k]").forEach(th=>th.onclick=()=>{
   const k=th.dataset.k; symSort=(symSort.k===k)?{k,dir:-symSort.dir}:{k,dir:-1}; renderSymbols();});
 $("sym-add-btn").onclick=()=>{const v=$("sym-add").value.trim().toUpperCase();
   if(v){if(!SYMBOL_ADDED.includes(v))SYMBOL_ADDED.push(v); $("sym-add").value=""; loadSymbols();}};
 $("sym-add").addEventListener("keydown",e=>{if(e.key==="Enter")$("sym-add-btn").click();});
 $("sym-reload").onclick=loadSymbols;
+$("sym-train-all").onclick=()=>{
+  if(confirm(`Train + walk-forward + holdout for all ${SYM_ROWS.length} symbols? Runs ${PIPE_CAP} at a time; watch progress in the Status column and the Jobs panel.`))
+    startPipelineAll();};
 
 /* ---------- init ---------- */
 refreshRunSelectors();
