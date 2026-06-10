@@ -56,9 +56,13 @@ class MarketDataFeed:
         except ImportError as exc:  # pragma: no cover
             raise RuntimeError(f"{module_name} is required for live/network data.") from exc
         klass = getattr(module, self.exchange_id)
-        options: dict = {"defaultType": self.default_type}
-        if self.default_type == "spot":
-            options["fetchMarkets"] = ["spot"]  # faster market load; futures load all
+        # defaultType / fetchMarkets are Binance-specific knobs; other venues (Coinbase,
+        # Kraken, …) reject or mis-load markets with them, so only apply on Binance.
+        options: dict = {}
+        if self.exchange_id.startswith("binance"):
+            options["defaultType"] = self.default_type
+            if self.default_type == "spot":
+                options["fetchMarkets"] = ["spot"]  # faster market load; futures load all
         client = klass(
             {
                 "apiKey": self._api_key,

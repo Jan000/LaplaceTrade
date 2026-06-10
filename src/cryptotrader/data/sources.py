@@ -141,7 +141,8 @@ async def enrich_ohlcv(settings, ohlcv: pd.DataFrame, start: datetime, feed) -> 
     """Merge the enabled optional sources onto ``ohlcv`` (best-effort, fail-safe)."""
     f = settings.features
     if not (f.use_taker_flow or f.use_funding or f.use_open_interest
-            or f.use_cross_asset or f.use_breadth or f.use_fear_greed):
+            or f.use_cross_asset or f.use_breadth or f.use_fear_greed
+            or f.use_coinbase_premium):
         return ohlcv
     if ohlcv.empty:
         return ohlcv
@@ -249,6 +250,35 @@ async def enrich_ohlcv(settings, ohlcv: pd.DataFrame, start: datetime, feed) -> 
                 logger.info("Merged market breadth over %d symbols", len(rets))
         except Exception:
             logger.warning("breadth source unavailable; skipping.", exc_info=True)
+
+    if f.use_coinbase_premium:
+        try:
+            import numpy as np
+
+            from cryptotrader.data.ingestion import MarketDataFeed
+
+            base = symbol.split("/")[0]
+            cb_feed = MarketDataFeed(
+                exchange_id=f.premium_exchange, symbol=f"{base}/USD",
+                timeframe=f.premium_fetch_tf, cache_dir=settings.data.cache_dir,
+            )
+            try:
+                cb = await cb_feed.fetch_history(start)
+            finally:
+                await cb_feed.close()
+            if not cb.empty:
+                cc = cb["close"].copy()
+                cc.index = _to_utc(cc.index)
+                # Resample the finer USD candles to the base timeframe (left-labelled, so a
+                # bar's premium uses that bar's own close — same-bar, no look-ahead).
+                cc4 = cc.resample(tf, label="left", closed="left").last()
+                cb_aligned = _exact_or_nearest(cc4, out.index)
+                prem = (cb_aligned - out["close"]) / out["close"]
+                out["cb_premium"] = prem
+                logger.info("Merged %s premium (%d rows, %d aligned)",
+                            f.premium_exchange, len(cb), int(prem.notna().sum()))
+        except Exception:
+            logger.warning("coinbase_premium source unavailable; skipping.", exc_info=True)
 
     if f.use_fear_greed:
         try:

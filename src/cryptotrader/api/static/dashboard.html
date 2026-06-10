@@ -576,6 +576,8 @@ const FEATURE_MODULES=[
    desc:"Average return & % positive of an alt basket (breadth_symbols) + BTC vs market — how the whole market moves. ON (robust)."},
   {key:"features.use_fear_greed", label:"Fear & Greed index",
    desc:"Crypto Fear & Greed sentiment (alternative.me, free daily) — level + daily change. Tested: HURT (too coarse/redundant) — off."},
+  {key:"features.use_coinbase_premium", label:"Coinbase premium",
+   desc:"USD-venue (Coinbase) vs USDT-venue (Binance) — US/institutional demand proxy. NOTE: Coinbase/Kraken only serve ~12 days of intraday history for free, so it can't be trained on the 2y window (off; usable only if you record it live)."},
   {key:"features.use_cross_asset", label:"Cross-asset",
    desc:"Return / correlation / relative-strength vs one second symbol (cross_symbol)."},
   {key:"features.use_htf", label:"Higher-timeframe context",

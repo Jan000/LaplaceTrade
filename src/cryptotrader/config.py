@@ -116,6 +116,11 @@ class FeatureConfig(BaseModel):
     )
     # Crypto Fear & Greed index (alternative.me, free daily sentiment) — orthogonal to price TA.
     use_fear_greed: bool = False
+    # Cross-venue premium: price on a USD exchange (Coinbase) vs the USDT exchange (Binance) —
+    # a proxy for US/institutional demand & USDT de-peg. Orthogonal to perp funding.
+    use_coinbase_premium: bool = False
+    premium_exchange: str = "coinbase"
+    premium_fetch_tf: str = "1h"     # Coinbase has no 4h; fetch finer and resample to the base tf
     # --- Optional extra data sources (all opt-in; features computed only when
     # the source columns are present in the OHLCV frame) ---
     use_taker_flow: bool = False     # taker buy/sell volume + trade count (Binance klines)

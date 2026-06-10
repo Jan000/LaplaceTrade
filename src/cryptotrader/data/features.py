@@ -131,8 +131,10 @@ class MicrostructureFeatureEngine(FeatureCalculator):
         use_breadth: bool = False,
         breadth_symbols: list[str] | None = None,
         use_fear_greed: bool = False,
+        use_coinbase_premium: bool = False,
         vol_pct_window: int = 100,
     ) -> None:
+        self.use_coinbase_premium = use_coinbase_premium
         self.vol_pct_window = vol_pct_window
         self.atr_period = atr_period
         self.vwap_window = vwap_window
@@ -384,12 +386,22 @@ class MicrostructureFeatureEngine(FeatureCalculator):
                 feats["fng_level"] = zero
                 feats["fng_change"] = zero
 
+        # --- Cross-venue premium (Coinbase USD vs Binance USDT), merged by sources.
+        if self.use_coinbase_premium:
+            if "cb_premium" in cols:
+                prem = ohlcv["cb_premium"]
+                feats["cb_prem"] = prem * 100.0           # premium in % (tiny otherwise)
+                feats["cb_prem_change"] = prem.diff() * 100.0
+            else:
+                feats["cb_prem"] = zero
+                feats["cb_prem_change"] = zero
+
         for _ext in ("taker_buy_ratio", "taker_flow_z", "trade_intensity_z",
                      "avg_trade_size_z", "funding_rate", "funding_z", "oi_change",
                      "oi_z", "cross_ret", "cross_corr", "rel_strength",
                      "htf_trend", "htf_ret", "htf_rsi",
                      "breadth_ret", "breadth_pos", "breadth_rel",
-                     "fng_level", "fng_change"):
+                     "fng_level", "fng_change", "cb_prem", "cb_prem_change"):
             if _ext in feats:
                 feats[_ext] = feats[_ext].fillna(0.0)
 
@@ -457,4 +469,6 @@ class MicrostructureFeatureEngine(FeatureCalculator):
             names += ["breadth_ret", "breadth_pos", "breadth_rel"]
         if self.use_fear_greed:
             names += ["fng_level", "fng_change"]
+        if self.use_coinbase_premium:
+            names += ["cb_prem", "cb_prem_change"]
         return names
