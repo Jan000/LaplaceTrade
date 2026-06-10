@@ -46,8 +46,8 @@ from cryptotrader.execution.simulated import SimulatedExecutionHandler  # noqa: 
 from cryptotrader.ml.model import (  # noqa: E402
     LightGBMPredictor,
     MomentumBaselinePredictor,
+    make_labels,
     make_sample_weights,
-    make_triple_barrier_labels,
 )
 from cryptotrader.risk.manager import ATRRiskManager  # noqa: E402
 from cryptotrader.strategy.ml_strategy import MLStrategy  # noqa: E402
@@ -208,13 +208,9 @@ def main() -> None:
     def _prepare_one(df: pd.DataFrame):
         fe = build_feature_engine(settings)
         feats = fe.transform(df)
-        ltp, lsl = settings.barriers.label_barriers
-        labels, t1 = make_triple_barrier_labels(
-            df, feats["atr"], horizon=settings.barriers.horizon,
-            tp_mult=ltp, sl_mult=lsl, return_events=True,
-        )
+        labels, t1 = make_labels(df, feats["atr"], settings.barriers, return_events=True)
         w = make_sample_weights(t1)
-        valid = labels.index[: len(labels) - settings.barriers.horizon]
+        valid = labels.index[: len(labels) - settings.barriers.lookahead]
         return feats.loc[valid], labels.loc[valid], w.loc[valid]
 
     train_frames = [train_ohlcv]

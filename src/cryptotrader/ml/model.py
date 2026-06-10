@@ -75,6 +75,73 @@ def make_triple_barrier_labels(
     return labels_s
 
 
+def make_trend_scanning_labels(
+    ohlcv: pd.DataFrame,
+    min_window: int = 5,
+    max_window: int = 20,
+    t_threshold: float = 0.0,
+    return_events: bool = False,
+):
+    """Trend-scanning labels (Lopez de Prado, *ML for Asset Managers*, ch. 5).
+
+    For each bar, fit a linear trend on log-price over every forward window length in
+    ``[min_window, max_window]``, keep the window whose slope has the largest |t-stat|,
+    and label the bar by the **sign of that most-significant trend** (0 if |t| <
+    ``t_threshold``). This targets the dominant statistically-significant move ahead,
+    rather than which fixed ATR barrier is touched first. ``t1`` (the chosen window end)
+    drives the same uniqueness weighting as the triple-barrier labels.
+    """
+    from numpy.lib.stride_tricks import sliding_window_view
+
+    logp = np.log(ohlcv["close"].to_numpy(dtype=float))
+    n = len(logp)
+    best_abs_t = np.zeros(n)
+    best_slope = np.zeros(n)
+    best_len = np.full(n, 0, dtype=np.int64)
+    max_window = min(max_window, n - 1)
+    for L in range(max(3, min_window), max_window + 1):
+        x = np.arange(L, dtype=float)
+        xm = x.mean()
+        xc = x - xm
+        sxx = float((xc * xc).sum())
+        win = sliding_window_view(logp, L)                 # (n-L+1, L)
+        ym = win.mean(axis=1)
+        slope = (win @ xc) / sxx                            # sum(xc*y)/Sxx  (sum xc = 0)
+        sst = ((win - ym[:, None]) ** 2).sum(axis=1)
+        sse = np.maximum(sst - slope * slope * sxx, 1e-12)
+        t = slope / np.sqrt(sse / (L - 2) / sxx)
+        at = np.abs(t)
+        m = at > best_abs_t[: len(at)]                      # starts that improve at this L
+        idx = np.where(m)[0]
+        best_abs_t[idx] = at[idx]
+        best_slope[idx] = slope[idx]
+        best_len[idx] = L
+
+    labels = np.sign(best_slope).astype(np.int8)
+    if t_threshold > 0:
+        labels[best_abs_t < t_threshold] = 0
+    pos = np.arange(n, dtype=np.int64)
+    t1 = np.minimum(pos + np.where(best_len > 0, best_len, 1), n - 1)
+    labels_s = pd.Series(labels, index=ohlcv.index, name="label")
+    if return_events:
+        return labels_s, pd.Series(t1, index=ohlcv.index, name="t1")
+    return labels_s
+
+
+def make_labels(ohlcv: pd.DataFrame, atr: pd.Series, barriers, return_events: bool = False):
+    """Dispatch to the configured labelling method (triple-barrier or trend-scanning)."""
+    if getattr(barriers, "label_method", "triple_barrier") == "trend_scan":
+        return make_trend_scanning_labels(
+            ohlcv, barriers.ts_min_window, barriers.ts_max_window,
+            barriers.ts_t_threshold, return_events=return_events,
+        )
+    ltp, lsl = barriers.label_barriers
+    return make_triple_barrier_labels(
+        ohlcv, atr, horizon=barriers.horizon, tp_mult=ltp, sl_mult=lsl,
+        return_events=return_events,
+    )
+
+
 def make_sample_weights(t1: pd.Series) -> pd.Series:
     """Average-uniqueness sample weights for overlapping labels (Lopez de Prado, ch. 4).
 

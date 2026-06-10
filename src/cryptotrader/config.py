@@ -231,12 +231,24 @@ class BarrierConfig(BaseModel):
     horizon: int = 18
     label_tp_mult: float | None = None
     label_sl_mult: float | None = None
+    # Labelling method for the *training target* (exits always use the ATR barriers above):
+    #   "triple_barrier" — which ATR barrier (tp/sl) is touched first within `horizon`.
+    #   "trend_scan"     — sign of the most statistically-significant forward trend.
+    label_method: str = "triple_barrier"
+    ts_min_window: int = 5           # trend-scan: shortest forward window (bars)
+    ts_max_window: int = 20          # trend-scan: longest forward window (bars)
+    ts_t_threshold: float = 0.0      # trend-scan: min |t-stat| for a non-zero label (0 = always sign)
 
     @property
     def label_barriers(self) -> tuple[float, float]:
         """(tp, sl) multipliers for *labelling* — symmetric unless overridden."""
         sym = max(self.tp_mult, self.sl_mult)
         return (self.label_tp_mult or sym, self.label_sl_mult or sym)
+
+    @property
+    def lookahead(self) -> int:
+        """How many trailing bars have no full forward label window (to trim in training)."""
+        return self.ts_max_window if self.label_method == "trend_scan" else self.horizon
 
 
 class PersistenceConfig(BaseModel):
