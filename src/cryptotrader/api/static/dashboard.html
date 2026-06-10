@@ -212,11 +212,20 @@
       <h2 style="margin:0">Experiments</h2>
       <span class="sym">— every train / walk-forward / holdout run with its settings &amp; result</span>
       <div class="spacer"></div>
-      <span id="x-obs" class="sym" title="Live microstructure observations recorded by scripts/record_market.py"></span>
-      <div class="spacer"></div>
       <select id="x-kind"><option value="">All kinds</option><option value="walkforward">Walk-forward</option><option value="holdout">Holdout</option><option value="train">Train</option></select>
       <input type="text" id="x-search" placeholder="filter symbol…" style="width:140px">
       <button id="x-reload" class="ghost">Reload</button>
+    </div>
+    <!-- Live recorder control -->
+    <div class="row" style="flex-wrap:wrap;gap:8px;margin-top:6px;padding:8px;border:1px solid var(--line);border-radius:8px">
+      <span id="rec-dot" class="dot idle"></span>
+      <b>Live recorder</b>
+      <span id="rec-status" class="sym">—</span>
+      <div class="spacer"></div>
+      <label class="sym">every <input type="number" id="rec-interval" value="120" min="30" step="30" style="width:70px"> s</label>
+      <label class="sym"><input type="checkbox" id="rec-all" checked> all symbols</label>
+      <button id="rec-start" class="primary">Start recording</button>
+      <button id="rec-stop" class="danger" disabled>Stop</button>
     </div>
     <div class="tbl-wrap" style="max-height:600px">
       <table id="x-table">
@@ -1002,11 +1011,30 @@ const xpf=(r)=> r.kind==="walkforward"?r.result.mean_profit_factor
 async function loadExperiments(){
   try{ XROWS=await fetch("/api/experiments?limit=400").then(r=>r.json()); renderExperiments(); }
   catch(e){ $("x-rows").innerHTML=`<tr><td colspan="10" class="flat">Could not load experiments.</td></tr>`; }
-  try{ const o=await fetch("/api/observations").then(r=>r.json());
-    const per=Object.entries(o.counts||{}).map(([k,v])=>`${k}: ${v}`).join(" · ");
-    $("x-obs").textContent = o.total ? `Live recorder: ${o.total} obs (${per})` : "Live recorder: no data yet (run scripts/record_market.py)";
-  }catch(e){}
+  refreshRecorder();
 }
+/* ---------- live recorder control ---------- */
+let recTimer=null;
+async function refreshRecorder(){
+  try{const s=await fetch("/api/recorder/status").then(r=>r.json());
+    $("rec-dot").className="dot "+(s.running?"running":"idle");
+    $("rec-start").disabled=s.running; $("rec-stop").disabled=!s.running;
+    const per=Object.entries(s.counts||{}).sort((a,b)=>b[1]-a[1]).map(([k,v])=>`${k}:${v}`).join(" · ");
+    $("rec-status").textContent =
+      (s.running?`recording ${s.symbols.length} symbols every ${s.interval|0}s`:"stopped")
+      + (s.total?` — ${s.total} observations (${per})`:" — no data yet");
+    clearInterval(recTimer); recTimer = s.running ? setInterval(refreshRecorder,10000) : null;
+  }catch(e){ $("rec-status").textContent="(status unavailable)"; }
+}
+$("rec-start").onclick=async()=>{
+  const body={interval:Number($("rec-interval").value)||120};
+  if(!$("rec-all").checked && SYM_ROWS.length) body.symbols=SYM_ROWS.map(r=>r.symbol);
+  $("rec-start").disabled=true;
+  await fetch("/api/recorder/start",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
+  refreshRecorder();
+};
+$("rec-stop").onclick=async()=>{ $("rec-stop").disabled=true;
+  await fetch("/api/recorder/stop",{method:"POST"}); refreshRecorder(); };
 function renderExperiments(){
   const kindf=$("x-kind").value, q=$("x-search").value.trim().toUpperCase();
   let rows=XROWS.filter(r=>(!kindf||r.kind===kindf)&&(!q||(r.symbol||"").toUpperCase().includes(q)));

@@ -94,7 +94,8 @@ CREATE TABLE IF NOT EXISTS observations (
     spread_bps   REAL,
     ob_imbalance REAL,           -- (bid_vol - ask_vol)/(bid_vol + ask_vol) over top levels
     cb_premium   REAL,           -- (coinbase_usd - binance_usdt)/binance_usdt
-    funding_rate REAL
+    funding_rate REAL,
+    metrics      TEXT            -- JSON: full detailed microstructure payload
 );
 CREATE INDEX IF NOT EXISTS idx_obs_symbol ON observations(symbol, timestamp);
 """
@@ -146,8 +147,9 @@ class TradeStore:
         # connection still holds the WAL write lock — common with our per-request stores.
         await self._db.execute("PRAGMA busy_timeout=5000;")
         await self._db.executescript(_SCHEMA)
-        # Migration: older DBs predate the runs.environment column.
+        # Migration: older DBs predate the runs.environment / observations.metrics columns.
         await self._ensure_column("runs", "environment", "TEXT DEFAULT 'simulation'")
+        await self._ensure_column("observations", "metrics", "TEXT")
         await self._db.commit()
         logger.info("TradeStore connected at %s", self.db_path)
         return self
@@ -261,12 +263,18 @@ class TradeStore:
         await self._conn.commit()
 
     async def record_observation(self, timestamp: datetime, symbol: str, **metrics) -> None:
-        """Append one live market observation (order-book / premium / funding signals)."""
+        """Append one live market observation.
+
+        The five headline signals are stored as typed columns (easy to query/plot); the
+        full detailed payload is kept verbatim in the ``metrics`` JSON column.
+        """
         cols = ("mid_price", "spread_bps", "ob_imbalance", "cb_premium", "funding_rate")
+        payload = {k: v for k, v in metrics.items() if v is not None}
         await self._conn.execute(
             "INSERT INTO observations (timestamp, symbol, mid_price, spread_bps, "
-            "ob_imbalance, cb_premium, funding_rate) VALUES (?,?,?,?,?,?,?)",
-            (_iso(timestamp), symbol, *(metrics.get(c) for c in cols)),
+            "ob_imbalance, cb_premium, funding_rate, metrics) VALUES (?,?,?,?,?,?,?,?)",
+            (_iso(timestamp), symbol, *(metrics.get(c) for c in cols),
+             json.dumps(payload) if payload else None),
         )
         await self._conn.commit()
 

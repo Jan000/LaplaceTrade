@@ -34,7 +34,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     controller = EngineController(settings)
     app.state.controller = controller
     app.state.settings = settings
+    from cryptotrader.api.recorder_control import RecorderController
+
+    recorder = RecorderController(settings)
+    app.state.recorder = recorder
     register_management_routes(app, controller)  # /api/config + /api/train
+
+    @app.on_event("shutdown")
+    async def _shutdown() -> None:
+        await recorder.stop()
 
     @app.get("/")
     async def index() -> FileResponse:
@@ -112,6 +120,27 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         """Per-symbol count of recorded live observations (the forward dataset)."""
         counts = await _read_store_all(app.state.settings, lambda s: s.observation_count())
         return JSONResponse({"counts": counts, "total": sum(counts.values())})
+
+    @app.get("/api/recorder/status")
+    async def recorder_status() -> JSONResponse:
+        counts = await _read_store_all(app.state.settings, lambda s: s.observation_count())
+        return JSONResponse({**recorder.status(), "counts": counts,
+                             "total": sum(counts.values())})
+
+    @app.post("/api/recorder/start")
+    async def recorder_start(body: dict | None = None) -> JSONResponse:
+        body = body or {}
+        s = app.state.settings
+        symbols = body.get("symbols") or list(dict.fromkeys(
+            [*_COMMON_SYMBOLS, *(s.data.trade_symbols or []), s.exchange.symbol]))
+        interval = float(body.get("interval") or 120.0)
+        await recorder.start(symbols, interval)
+        return JSONResponse(recorder.status())
+
+    @app.post("/api/recorder/stop")
+    async def recorder_stop() -> JSONResponse:
+        await recorder.stop()
+        return JSONResponse(recorder.status())
 
     @app.get("/api/model")
     async def model_info() -> JSONResponse:
