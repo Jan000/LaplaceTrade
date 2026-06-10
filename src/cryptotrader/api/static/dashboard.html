@@ -543,7 +543,9 @@ async function loadModel(){   // detailed status of the CONFIGURED symbol, shown
 /* ---------- optional feature modules (toggle list) ---------- */
 const FEATURE_MODULES=[
   {key:"features.use_breadth", label:"Market breadth",
-   desc:"Average return & % positive of an alt basket (breadth_symbols) + BTC vs market — how the whole market moves. NEW."},
+   desc:"Average return & % positive of an alt basket (breadth_symbols) + BTC vs market — how the whole market moves. ON (robust)."},
+  {key:"features.use_fear_greed", label:"Fear & Greed index",
+   desc:"Crypto Fear & Greed sentiment (alternative.me, free daily) — level + daily change. Tested: HURT (too coarse/redundant) — off."},
   {key:"features.use_cross_asset", label:"Cross-asset",
    desc:"Return / correlation / relative-strength vs one second symbol (cross_symbol)."},
   {key:"features.use_htf", label:"Higher-timeframe context",

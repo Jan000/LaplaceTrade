@@ -100,6 +100,8 @@ class FeatureConfig(BaseModel):
     breadth_symbols: list[str] = Field(
         default_factory=lambda: ["ETH/USDT", "SOL/USDT", "BNB/USDT", "XRP/USDT"]
     )
+    # Crypto Fear & Greed index (alternative.me, free daily sentiment) — orthogonal to price TA.
+    use_fear_greed: bool = False
     # --- Optional extra data sources (all opt-in; features computed only when
     # the source columns are present in the OHLCV frame) ---
     use_taker_flow: bool = False     # taker buy/sell volume + trade count (Binance klines)

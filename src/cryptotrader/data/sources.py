@@ -141,7 +141,7 @@ async def enrich_ohlcv(settings, ohlcv: pd.DataFrame, start: datetime, feed) -> 
     """Merge the enabled optional sources onto ``ohlcv`` (best-effort, fail-safe)."""
     f = settings.features
     if not (f.use_taker_flow or f.use_funding or f.use_open_interest
-            or f.use_cross_asset or f.use_breadth):
+            or f.use_cross_asset or f.use_breadth or f.use_fear_greed):
         return ohlcv
     if ohlcv.empty:
         return ohlcv
@@ -250,4 +250,32 @@ async def enrich_ohlcv(settings, ohlcv: pd.DataFrame, start: datetime, feed) -> 
         except Exception:
             logger.warning("breadth source unavailable; skipping.", exc_info=True)
 
+    if f.use_fear_greed:
+        try:
+            fng = await fetch_fear_greed()
+            if not fng.empty:
+                # Daily index -> use the last COMPLETED day's value (shift 1), ffilled onto
+                # the bars: no look-ahead, and the same value holds across the day's bars.
+                daily = fng.resample("1D").last().shift(1)
+                out["fng"] = daily.reindex(out.index, method="ffill")
+                logger.info("Merged Fear & Greed (%d daily points, %d aligned)",
+                            len(fng), int(out["fng"].notna().sum()))
+        except Exception:
+            logger.warning("fear_greed source unavailable; skipping.", exc_info=True)
+
     return out
+
+
+async def fetch_fear_greed() -> pd.Series:
+    """Crypto Fear & Greed index (alternative.me, free, daily since 2018). 0=fear, 100=greed."""
+    import aiohttp
+
+    url = "https://api.alternative.me/fng/?limit=0&format=json"
+    async with aiohttp.ClientSession() as s:
+        async with s.get(url, timeout=aiohttp.ClientTimeout(total=20)) as r:
+            data = (await r.json(content_type=None)).get("data", [])
+    if not data:
+        return pd.Series(dtype=float, name="fng")
+    idx = pd.to_datetime([int(d["timestamp"]) for d in data], unit="s", utc=True)
+    vals = [float(d["value"]) for d in data]
+    return pd.Series(vals, index=idx, name="fng").sort_index()

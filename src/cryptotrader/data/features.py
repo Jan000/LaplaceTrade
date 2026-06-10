@@ -130,6 +130,7 @@ class MicrostructureFeatureEngine(FeatureCalculator):
         htf_lookback_bars: int = 200,
         use_breadth: bool = False,
         breadth_symbols: list[str] | None = None,
+        use_fear_greed: bool = False,
     ) -> None:
         self.atr_period = atr_period
         self.vwap_window = vwap_window
@@ -167,6 +168,7 @@ class MicrostructureFeatureEngine(FeatureCalculator):
         self.htf_lookback_bars = htf_lookback_bars
         self.use_breadth = use_breadth
         self.breadth_symbols = breadth_symbols or ["ETH/USDT", "SOL/USDT", "BNB/USDT", "XRP/USDT"]
+        self.use_fear_greed = use_fear_greed
 
         self._warmup = max(
             atr_period, vwap_window, volume_spike_window, zscore_window,
@@ -370,11 +372,22 @@ class MicrostructureFeatureEngine(FeatureCalculator):
                 feats["breadth_pos"] = zero
                 feats["breadth_rel"] = zero
 
+        # --- Fear & Greed: external daily sentiment (alternative.me), merged by sources.
+        if self.use_fear_greed:
+            if "fng" in cols:
+                fng = ohlcv["fng"]
+                feats["fng_level"] = (fng - 50.0) / 50.0     # centred sentiment: -1 fear .. +1 greed
+                feats["fng_change"] = fng.diff() / 50.0       # day-over-day shift in sentiment
+            else:
+                feats["fng_level"] = zero
+                feats["fng_change"] = zero
+
         for _ext in ("taker_buy_ratio", "taker_flow_z", "trade_intensity_z",
                      "avg_trade_size_z", "funding_rate", "funding_z", "oi_change",
                      "oi_z", "cross_ret", "cross_corr", "rel_strength",
                      "htf_trend", "htf_ret", "htf_rsi",
-                     "breadth_ret", "breadth_pos", "breadth_rel"):
+                     "breadth_ret", "breadth_pos", "breadth_rel",
+                     "fng_level", "fng_change"):
             if _ext in feats:
                 feats[_ext] = feats[_ext].fillna(0.0)
 
@@ -432,4 +445,6 @@ class MicrostructureFeatureEngine(FeatureCalculator):
             names += ["htf_trend", "htf_ret", "htf_rsi"]
         if self.use_breadth:
             names += ["breadth_ret", "breadth_pos", "breadth_rel"]
+        if self.use_fear_greed:
+            names += ["fng_level", "fng_change"]
         return names
