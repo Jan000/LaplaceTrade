@@ -10,6 +10,15 @@ from cryptotrader.data.features import MicrostructureFeatureEngine
 from cryptotrader.data.ingestion import make_synthetic_ohlcv
 
 
+def test_engine_accepts_full_feature_config() -> None:
+    """Splatting the whole FeatureConfig into the engine must never crash — config-only
+    fields (e.g. premium_exchange) are absorbed. Guards the /api/start path."""
+    from cryptotrader.config import FeatureConfig
+
+    fe = MicrostructureFeatureEngine(**FeatureConfig().model_dump())
+    assert fe.feature_names  # constructed fine
+
+
 def test_feature_names_and_shape() -> None:
     ohlcv = make_synthetic_ohlcv(n=500, seed=1)
     fe = MicrostructureFeatureEngine()

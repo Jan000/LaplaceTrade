@@ -133,6 +133,9 @@ class MicrostructureFeatureEngine(FeatureCalculator):
         use_fear_greed: bool = False,
         use_coinbase_premium: bool = False,
         vol_pct_window: int = 100,
+        **_config_only,   # absorb FeatureConfig fields used elsewhere (e.g. premium_exchange,
+                          # premium_fetch_tf) so splatting settings.features.model_dump() never
+                          # crashes the engine when a config-only field is added.
     ) -> None:
         self.use_coinbase_premium = use_coinbase_premium
         self.vol_pct_window = vol_pct_window
