@@ -212,6 +212,8 @@
       <h2 style="margin:0">Experiments</h2>
       <span class="sym">— every train / walk-forward / holdout run with its settings &amp; result</span>
       <div class="spacer"></div>
+      <span id="x-obs" class="sym" title="Live microstructure observations recorded by scripts/record_market.py"></span>
+      <div class="spacer"></div>
       <select id="x-kind"><option value="">All kinds</option><option value="walkforward">Walk-forward</option><option value="holdout">Holdout</option><option value="train">Train</option></select>
       <input type="text" id="x-search" placeholder="filter symbol…" style="width:140px">
       <button id="x-reload" class="ghost">Reload</button>
@@ -1000,6 +1002,10 @@ const xpf=(r)=> r.kind==="walkforward"?r.result.mean_profit_factor
 async function loadExperiments(){
   try{ XROWS=await fetch("/api/experiments?limit=400").then(r=>r.json()); renderExperiments(); }
   catch(e){ $("x-rows").innerHTML=`<tr><td colspan="10" class="flat">Could not load experiments.</td></tr>`; }
+  try{ const o=await fetch("/api/observations").then(r=>r.json());
+    const per=Object.entries(o.counts||{}).map(([k,v])=>`${k}: ${v}`).join(" · ");
+    $("x-obs").textContent = o.total ? `Live recorder: ${o.total} obs (${per})` : "Live recorder: no data yet (run scripts/record_market.py)";
+  }catch(e){}
 }
 function renderExperiments(){
   const kindf=$("x-kind").value, q=$("x-search").value.trim().toUpperCase();

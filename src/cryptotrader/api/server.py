@@ -107,6 +107,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
         return JSONResponse(read_experiments(limit))
 
+    @app.get("/api/observations")
+    async def observations() -> JSONResponse:
+        """Per-symbol count of recorded live observations (the forward dataset)."""
+        counts = await _read_store_all(app.state.settings, lambda s: s.observation_count())
+        return JSONResponse({"counts": counts, "total": sum(counts.values())})
+
     @app.get("/api/model")
     async def model_info() -> JSONResponse:
         """Which model the engine will load for the configured symbol, and whether it matches."""

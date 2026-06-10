@@ -81,6 +81,22 @@ CREATE TABLE IF NOT EXISTS feature_rows (
     features  TEXT    NOT NULL   -- JSON {name: value}
 );
 CREATE INDEX IF NOT EXISTS idx_features_run ON feature_rows(run_id);
+
+-- Live market observations recorded continuously (NOT tied to a run) to build a future
+-- training dataset of signals only available live: order-book imbalance/spread, the
+-- cross-venue (Coinbase) premium, current funding. These cannot be backfilled from free
+-- history, so we record them going forward.
+CREATE TABLE IF NOT EXISTS observations (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    timestamp    TEXT    NOT NULL,
+    symbol       TEXT    NOT NULL,
+    mid_price    REAL,
+    spread_bps   REAL,
+    ob_imbalance REAL,           -- (bid_vol - ask_vol)/(bid_vol + ask_vol) over top levels
+    cb_premium   REAL,           -- (coinbase_usd - binance_usdt)/binance_usdt
+    funding_rate REAL
+);
+CREATE INDEX IF NOT EXISTS idx_obs_symbol ON observations(symbol, timestamp);
 """
 
 
@@ -243,6 +259,30 @@ class TradeStore:
             (run_id, _iso(timestamp), json.dumps(features)),
         )
         await self._conn.commit()
+
+    async def record_observation(self, timestamp: datetime, symbol: str, **metrics) -> None:
+        """Append one live market observation (order-book / premium / funding signals)."""
+        cols = ("mid_price", "spread_bps", "ob_imbalance", "cb_premium", "funding_rate")
+        await self._conn.execute(
+            "INSERT INTO observations (timestamp, symbol, mid_price, spread_bps, "
+            "ob_imbalance, cb_premium, funding_rate) VALUES (?,?,?,?,?,?,?)",
+            (_iso(timestamp), symbol, *(metrics.get(c) for c in cols)),
+        )
+        await self._conn.commit()
+
+    async def observation_count(self) -> dict[str, int]:
+        """Per-symbol count of recorded observations (for the dashboard status)."""
+        async with self._conn.execute(
+            "SELECT symbol, COUNT(*) AS n FROM observations GROUP BY symbol"
+        ) as cur:
+            return {r["symbol"]: r["n"] for r in await cur.fetchall()}
+
+    async def get_observations(self, symbol: str, limit: int = 5000) -> list[dict[str, Any]]:
+        async with self._conn.execute(
+            "SELECT * FROM observations WHERE symbol = ? ORDER BY timestamp DESC LIMIT ?",
+            (symbol, limit),
+        ) as cur:
+            return [dict(r) for r in await cur.fetchall()]
 
     # ------------------------------------------------------------------ #
     # Reads (consumed by the dashboard API)
