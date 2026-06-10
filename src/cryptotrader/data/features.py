@@ -131,7 +131,9 @@ class MicrostructureFeatureEngine(FeatureCalculator):
         use_breadth: bool = False,
         breadth_symbols: list[str] | None = None,
         use_fear_greed: bool = False,
+        vol_pct_window: int = 100,
     ) -> None:
+        self.vol_pct_window = vol_pct_window
         self.atr_period = atr_period
         self.vwap_window = vwap_window
         self.momentum_windows = sorted(momentum_windows or [3, 5, 15])
@@ -174,7 +176,7 @@ class MicrostructureFeatureEngine(FeatureCalculator):
             atr_period, vwap_window, volume_spike_window, zscore_window,
             max(self.momentum_windows), extra_momentum, macd_slow, rsi_slow,
             bollinger_window, adx_period, donchian, parkinson, obv_z, amihud,
-            fracdiff_window, cross_corr_window, trend_ema,
+            fracdiff_window, cross_corr_window, trend_ema, vol_pct_window,
             htf_lookback_bars if use_htf else 0,
         ) + 2
 
@@ -397,11 +399,19 @@ class MicrostructureFeatureEngine(FeatureCalculator):
         ema_trend = c.ewm(span=self.trend_ema, adjust=False).mean()
         feats["trend_sig"] = np.sign(c - ema_trend)
 
+        # vol_pct: backward-looking percentile rank of realized volatility within a trailing
+        # window — a HELPER for the strategy's volatility-regime gate (not a model feature).
+        # Leak-free: a bar's rank uses only itself + the prior window-1 bars. 0.5 where undefined.
+        feats["vol_pct"] = (
+            feats["realized_vol"].rolling(self.vol_pct_window, min_periods=self.vol_pct_window)
+            .rank(pct=True).fillna(0.5)
+        )
+
         frame = pd.DataFrame(feats, index=ohlcv.index)
         # atr is kept as a trailing helper column (labels + ATR sizing); it is
-        # NOT a model feature (raw atr is price-scaled / non-stationary). trend_sig
-        # is likewise a helper consumed only by the strategy's regime filter.
-        return frame[self._names + ["atr", "trend_sig"]]
+        # NOT a model feature (raw atr is price-scaled / non-stationary). trend_sig and
+        # vol_pct are likewise helpers consumed only by the strategy's regime gates.
+        return frame[self._names + ["atr", "trend_sig", "vol_pct"]]
 
     def update(self, bar: Bar) -> pd.Series | None:
         self._buffer.append(bar)

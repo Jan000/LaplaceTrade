@@ -190,6 +190,11 @@ class StrategyConfig(BaseModel):
     # (long only above the EMA, short only below). Symmetric, so it stays regime-
     # adaptive rather than just betting on the prevailing direction.
     trend_filter: bool = False
+    # Volatility-regime gate: only act when the bar's realized-vol percentile (rolling,
+    # backward-looking) is within [low, high]. Skips dead-low-vol chop / extreme-vol bars.
+    vol_gate: bool = False
+    vol_gate_low: float = 0.0        # skip below this realized-vol percentile (0 = no floor)
+    vol_gate_high: float = 1.0       # skip above this percentile (1 = no cap)
 
 
 class BarrierConfig(BaseModel):

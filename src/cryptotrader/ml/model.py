@@ -19,7 +19,7 @@ _SIDE_TO_CLASS = {Side.SHORT: 0, Side.FLAT: 1, Side.LONG: 2}
 # Helper columns produced by the feature engine that are NOT model features:
 #  * "atr"       — used for labels + ATR position sizing (raw atr is non-stationary).
 #  * "trend_sig" — used only by the strategy's regime filter.
-_NON_FEATURE_COLS = {"atr", "trend_sig"}
+_NON_FEATURE_COLS = {"atr", "trend_sig", "vol_pct"}
 
 
 def make_triple_barrier_labels(
