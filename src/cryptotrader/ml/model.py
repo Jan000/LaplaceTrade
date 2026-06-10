@@ -129,6 +129,30 @@ class MomentumBaselinePredictor:
         return self.predict_batch(features.to_frame().T)[0]
 
 
+def _apply_temperature(proba: np.ndarray, temperature: float) -> np.ndarray:
+    """Temperature-scale a probability matrix. T>1 softens, T<1 sharpens; argmax unchanged."""
+    if not temperature or temperature == 1.0:
+        return proba
+    logp = np.log(np.clip(proba, 1e-12, 1.0)) / float(temperature)
+    logp -= logp.max(axis=1, keepdims=True)
+    e = np.exp(logp)
+    return e / e.sum(axis=1, keepdims=True)
+
+
+def fit_temperature(proba: np.ndarray, y: np.ndarray) -> float:
+    """Pick the temperature minimising multiclass NLL on a held-out set (grid, no scipy)."""
+    if len(y) == 0:
+        return 1.0
+    idx = np.arange(len(y))
+    best_t, best_nll = 1.0, np.inf
+    for t in np.linspace(0.5, 3.0, 51):
+        p = _apply_temperature(proba, t)
+        nll = -float(np.mean(np.log(p[idx, y] + 1e-12)))
+        if nll < best_nll:
+            best_nll, best_t = nll, float(t)
+    return best_t
+
+
 class EnsemblePredictor:
     """Averages the class probabilities of several LightGBM members.
 
@@ -136,19 +160,28 @@ class EnsemblePredictor:
     so they make different errors. Averaging their probabilities cancels seed/sampling
     variance — the dominant noise source when the training set is only a few thousand
     rows — without changing the systematic signal. Implements the Predictor protocol.
+
+    ``temperature`` (default 1.0 = off) applies post-hoc temperature scaling to the
+    averaged probabilities so the reported confidence is calibrated — making the
+    strategy's entry thresholds and EV gate meaningful. It is fit on held-out data.
     """
 
-    def __init__(self, members: list["LightGBMPredictor"]) -> None:
+    def __init__(self, members: list["LightGBMPredictor"], temperature: float = 1.0) -> None:
         if not members:
             raise ValueError("EnsemblePredictor needs at least one member.")
         self._members = members
+        self.temperature = float(temperature)
 
-    def predict_batch(self, features: pd.DataFrame) -> list[Prediction]:
+    def proba_matrix(self, features: pd.DataFrame) -> np.ndarray:
+        """Averaged raw class probabilities of the members (before temperature)."""
         proba = None
         for m in self._members:
             p = m.predict_proba_matrix(features)
             proba = p if proba is None else proba + p
-        proba = proba / len(self._members)
+        return proba / len(self._members)
+
+    def predict_batch(self, features: pd.DataFrame) -> list[Prediction]:
+        proba = _apply_temperature(self.proba_matrix(features), self.temperature)
         out: list[Prediction] = []
         for row in proba:
             cls = int(np.argmax(row))
@@ -162,7 +195,8 @@ class EnsemblePredictor:
         import joblib
 
         joblib.dump(
-            {"ensemble": [(m._model, m._feature_names) for m in self._members]}, path
+            {"ensemble": [(m._model, m._feature_names) for m in self._members],
+             "temperature": self.temperature}, path
         )
 
     @classmethod
@@ -175,7 +209,7 @@ class EnsemblePredictor:
             m = LightGBMPredictor()
             m._model, m._feature_names = model, names
             members.append(m)
-        return cls(members)
+        return cls(members, temperature=float(blob.get("temperature", 1.0)))
 
 
 class LightGBMPredictor:
@@ -272,3 +306,44 @@ class LightGBMPredictor:
 
     def predict(self, features: pd.Series) -> Prediction:
         return self.predict_batch(features.to_frame().T)[0]
+
+
+def build_ensemble(settings, feats, labels, weights, cal_feats=None, cal_labels=None):
+    """Train the seed-ensemble (shared by train_model.py and walkforward.py).
+
+    Returns ``(predictor, metrics)``. When ``model.use_calibration`` is on and a
+    calibration slice is supplied, the ensemble's probabilities are temperature-scaled
+    (fit on that held-out slice). Returns an :class:`EnsemblePredictor` whenever
+    calibration is applied (so the temperature is carried), otherwise a single
+    :class:`LightGBMPredictor` for ``ensemble_size == 1``.
+    """
+    n = max(1, settings.model.ensemble_size)
+    members: list[LightGBMPredictor] = []
+    metrics: dict[str, float] = {"val_accuracy": 0.0}
+    for k in range(n):
+        params = settings.model.to_lgbm_params()
+        params["random_state"] = settings.model.random_state + k
+        m = LightGBMPredictor(params, drop_features=settings.model.drop_features)
+        metrics = m.train(feats, labels, eval_fraction=settings.model.eval_fraction,
+                          sample_weight=weights)
+        members.append(m)
+
+    use_cal = getattr(settings.model, "use_calibration", False) and cal_feats is not None
+    if not use_cal:
+        return (members[0] if n == 1 else EnsemblePredictor(members)), metrics
+
+    pred = EnsemblePredictor(members)        # wrap (even a single member) so T is carried
+    try:
+        names = members[0]._feature_names
+        df = cal_feats[names].join(cal_labels.rename("y")).dropna()
+        if len(df) >= 30:
+            proba = pred.proba_matrix(df)
+            y = df["y"].map(lambda v: _SIDE_TO_CLASS[Side(int(np.sign(v)))]).to_numpy()
+            pred.temperature = fit_temperature(proba, y)
+            logger.info("Calibration: temperature T=%.3f fit on %d held-out rows",
+                        pred.temperature, len(df))
+        else:
+            logger.warning("Calibration skipped: only %d clean held-out rows.", len(df))
+    except Exception:  # pragma: no cover - calibration must never break training
+        logger.exception("Temperature calibration failed; using uncalibrated ensemble.")
+    return pred, metrics

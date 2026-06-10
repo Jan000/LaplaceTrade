@@ -59,6 +59,11 @@ model:
   ensemble_size: 7
   bagging_freq: 1
   eval_fraction: 0.2
+  # Temperature-scale the ensemble probabilities (fit on a held-out tail of the primary
+  # training data). Passed a 2-structure walk-forward check: more positive folds in both
+  # (A 3/5->4/5 MIXED->ROBUST, B 3/6->4/6 +2.3pp), same/PF~flat — stabilises the thin edge.
+  use_calibration: true
+  calibration_fraction: 0.2
   drop_features:
   - hour_cos
   - hour_sin

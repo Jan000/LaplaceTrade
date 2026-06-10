@@ -195,6 +195,9 @@ what the shipped defaults are.
 6. **Train** a **seed-ensemble** of `model.ensemble_size` LightGBM models (different
    seeds + bagging) and average them, to cancel the seed/sampling variance that
    dominates a few-thousand-row training set.
+6b. **Calibrate** (`model.use_calibration`, on) — temperature-scale the averaged
+   probabilities, fit on a held-out tail of the primary data (`calibration_fraction`), so
+   the reported confidence is honest and the entry thresholds / EV gate gate better.
 7. **Save & evaluate** — writes the **per-symbol** model `models/model_<SYMBOL>.pkl` (+ a
    `.meta.json` sidecar recording symbol/timeframe/pooled-symbols/feature-set, and a
    per-symbol `holdout_<SYMBOL>.parquet`) and prints a model-vs-baseline backtest on the
@@ -372,8 +375,10 @@ use only the last *completed* value, forward-filled onto the bars).
 **Validate with `walkforward.py`, not a single backtest** — one split is easy to
 overfit. The shipped config already reflects the biggest lessons learned (4h beats
 1h on cost drag; symmetric labels; meta-labeling OFF; *regularise* rather than
-"stronger fit" — fewer leaves/trees generalised better; pool ETH; ~730 days). Treat
-the table below as a search space to *re-validate*, not as guaranteed wins:
+"stronger fit" — fewer leaves/trees generalised better; pool ETH; ~730 days; **funding +
+breadth** modules on; **probability calibration** on — it stabilised the edge across
+fold structures). Note these are **window-sensitive**: judge by the WF *verdict* and PF,
+and re-validate after any change. Treat the table below as a search space, not guarantees:
 
 Lower-impact levers, roughly in order:
 

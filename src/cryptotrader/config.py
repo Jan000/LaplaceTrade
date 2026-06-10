@@ -131,6 +131,10 @@ class MLConfig(BaseModel):
     drop_features: list[str] = Field(default_factory=list)  # feature names to exclude (anti-overfit pruning)
     ensemble_size: int = 1                  # >1 averages N seed-varied models (variance reduction)
     bagging_freq: int = 0                   # LightGBM bagging frequency; >0 makes `subsample` actually bag
+    # Probability calibration: temperature-scale the ensemble's class probabilities, fit on a
+    # held-out tail of the primary training data, so the entry thresholds / EV gate are meaningful.
+    use_calibration: bool = False
+    calibration_fraction: float = 0.2       # tail of primary train data held out to fit the temperature
 
     def to_lgbm_params(self) -> dict[str, Any]:
         return {

@@ -556,6 +556,8 @@ const FEATURE_MODULES=[
    desc:"Perpetual funding rate (positioning / sentiment) — free Binance USDⓈ-M futures, full history."},
   {key:"features.use_open_interest", label:"Open interest",
    desc:"Open-interest change (positioning) — Binance futures, but history is capped at ~30 days (flat before that, so weak for training)."},
+  {key:"model.use_calibration", label:"Probability calibration (model)",
+   desc:"Temperature-scale the ensemble's probabilities (fit on held-out data) so confidence is honest and the entry thresholds gate better. ON (robust)."},
   {key:"strategy.trend_filter", label:"Trend filter (strategy)",
    desc:"Only take signals that agree with the slow-EMA trend. Tested: didn't help."},
 ];

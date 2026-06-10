@@ -228,6 +228,17 @@ def main() -> None:
         logger.info("Pooled %d training symbol(s) into the fit", len(train_frames) - 1)
 
     parts = [_prepare_one(df) for df in train_frames if not df.empty]
+
+    # Calibration: hold out the recent tail of the PRIMARY symbol (never fit by the trees)
+    # so the temperature is fit on data the model didn't train on.
+    cal_feats = cal_labels = None
+    if settings.model.use_calibration and parts:
+        f0, l0, w0 = parts[0]
+        cut = int(len(f0) * (1.0 - settings.model.calibration_fraction))
+        if cut > 50 and len(f0) - cut >= 30:
+            cal_feats, cal_labels = f0.iloc[cut:], l0.iloc[cut:]
+            parts[0] = (f0.iloc[:cut], l0.iloc[:cut], w0.iloc[:cut])
+
     train_feats = pd.concat([p[0] for p in parts]).reset_index(drop=True)
     train_labels = pd.concat([p[1] for p in parts]).reset_index(drop=True)
     train_weights = pd.concat([p[2] for p in parts]).reset_index(drop=True)
@@ -251,26 +262,15 @@ def main() -> None:
             out_path, info["meta_train_accuracy"], info["primary_win_base_rate"],
         )
     else:
-        n_members = max(1, settings.model.ensemble_size)
-        members, metrics = [], {"val_accuracy": 0.0}
-        for k in range(n_members):
-            params = settings.model.to_lgbm_params()
-            params["random_state"] = settings.model.random_state + k
-            m = LightGBMPredictor(params, drop_features=settings.model.drop_features)
-            metrics = m.train(
-                train_feats, train_labels, eval_fraction=settings.model.eval_fraction,
-                sample_weight=train_weights,
-            )
-            members.append(m)
-        if n_members == 1:
-            predictor = members[0]
-        else:
-            from cryptotrader.ml.model import EnsemblePredictor
+        from cryptotrader.ml.model import build_ensemble
 
-            predictor = EnsemblePredictor(members)
+        predictor, metrics = build_ensemble(
+            settings, train_feats, train_labels, train_weights, cal_feats, cal_labels)
         predictor.save(out_path)
-        logger.info("Saved %d-member model to %s (last val_accuracy=%.3f)",
-                    n_members, out_path, metrics["val_accuracy"])
+        temp = getattr(predictor, "temperature", 1.0)
+        logger.info("Saved %d-member model to %s (val_accuracy=%.3f, temperature=%.3f)",
+                    max(1, settings.model.ensemble_size), out_path,
+                    metrics["val_accuracy"], temp)
 
     # Metadata sidecar — powers the dashboard's symbol guardrail.
     write_meta(out_path, {

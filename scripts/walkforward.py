@@ -123,6 +123,17 @@ def train_predictor(settings: Settings, train_frames: list):
     a many-to-many join inside the trainer.
     """
     parts = [_prepare_one(settings, df) for df in train_frames if not df.empty]
+
+    # Calibration: hold out the recent tail of the PRIMARY symbol (never fit by the trees)
+    # to fit the temperature; the rest of the primary + all pooled symbols train the model.
+    cal_feats = cal_labels = None
+    if settings.model.use_calibration and parts:
+        f0, l0, w0 = parts[0]
+        cut = int(len(f0) * (1.0 - settings.model.calibration_fraction))
+        if cut > 50 and len(f0) - cut >= 30:
+            cal_feats, cal_labels = f0.iloc[cut:], l0.iloc[cut:]
+            parts[0] = (f0.iloc[:cut], l0.iloc[:cut], w0.iloc[:cut])
+
     feats = pd.concat([p[0] for p in parts]).reset_index(drop=True)
     labels = pd.concat([p[1] for p in parts]).reset_index(drop=True)
     weights = pd.concat([p[2] for p in parts]).reset_index(drop=True)
@@ -136,20 +147,11 @@ def train_predictor(settings: Settings, train_frames: list):
             sample_weight=weights,
         )
         return predictor
-    n_members = max(1, settings.model.ensemble_size)
-    members = []
-    for k in range(n_members):
-        params = settings.model.to_lgbm_params()
-        params["random_state"] = settings.model.random_state + k
-        m = LightGBMPredictor(params, drop_features=settings.model.drop_features)
-        m.train(feats, labels, eval_fraction=settings.model.eval_fraction,
-                sample_weight=weights)
-        members.append(m)
-    if n_members == 1:
-        return members[0]
-    from cryptotrader.ml.model import EnsemblePredictor
 
-    return EnsemblePredictor(members)
+    from cryptotrader.ml.model import build_ensemble
+
+    predictor, _ = build_ensemble(settings, feats, labels, weights, cal_feats, cal_labels)
+    return predictor
 
 
 def backtest(settings: Settings, test_ohlcv, predictor) -> dict:
