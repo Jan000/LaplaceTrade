@@ -67,6 +67,12 @@ filterable (side, win/loss/break-even, exit reason, free-text), sortable by any 
 with CSV export. A **Clear data…** button wipes the persisted runs of the selected
 environment (e.g. reset all simulations) after a confirm — blocked while the engine runs.
 
+**Experiments tab** — an append-only history of every train / walk-forward / holdout run
+with a snapshot of the settings that produced it (timeframe, pooling, feature modules,
+calibration, label method, gates) and its result, sortable and filterable, with a
+click-to-expand full config+result JSON — so you can see exactly which knob changed which
+number. Also shows the **live recorder** count (microstructure observations collected so far).
+
 **Settings & Training tab**
 * **Model status** — shows whether the trained per-symbol model or the baseline is
   active for the configured symbol, when it was trained and which symbols were pooled,
@@ -139,12 +145,32 @@ separately, so test runs never pollute your real track record.
 9. **Maintain** — re-train on a rolling window periodically and re-validate; **Stop** to
    flatten new decisions.
 
-> ⚠️ **Operational risk.** Exits (stop-loss / take-profit / time-exit) are driven by the
-> running engine, not by native exchange orders. **If the server is stopped while a real
-> position is open, that position is left unmanaged.** Keep the process running (and the
-> position size small) until native exchange-side protective orders are added. This is an
-> MVP — paper-trade extensively before risking real capital, and never trade money you
-> can't afford to lose.
+> ⚠️ **Operational risk.** The running engine is the primary exit driver. As a safety net,
+> on every real entry it now also places a **native exchange stop-loss (+ take-profit)** so a
+> stopped/crashed server does **not** leave the position fully unmanaged (best-effort — a
+> failed placement is logged loudly; verify on your exchange). Residual gap: if a native stop
+> fills while the bot is down, on restart the engine starts flat and won't have that trade
+> record (the position is *protected*, just not *reconciled*). Still an MVP — keep size small,
+> paper-trade extensively first (below), and never trade money you can't afford to lose.
+
+### Before real money — the forward-test checklist
+
+Walk-forward/holdout are *historical* out-of-sample; before risking funds, confirm the edge
+**forward, in real time**, and collect the data you'll want later:
+
+1. **Record live signals now** — run `python scripts/record_market.py --symbols BTC/USDT …`
+   continuously. It logs order-book imbalance/spread, the Coinbase premium and funding into
+   the `observations` table (signals free history can't provide). The **Experiments** tab
+   shows the running count. After weeks/months this becomes a new training source.
+2. **Paper-forward-test** — header mode **Live**, **real orders OFF**, **Start**; let it run
+   for weeks. Fills are simulated on *real-time* data, tagged `paper`. Review under **Trades &
+   Analytics → Environment = paper**. Only proceed if it stays positive forward, not just in
+   the backtest.
+3. **Track every change** — the **Experiments** tab records which settings produced which
+   walk-forward/holdout result; re-validate (and re-paper-test) after any change.
+4. **Verify the safety net** — with a tiny real position, confirm the native stop/TP appear
+   on the exchange (and cancel on exit) before scaling up.
+5. **Then go live small** — low `risk_per_trade`, `max_leverage` 1.0, only **ROBUST** symbols.
 
 ## Live engine
 
@@ -159,7 +185,10 @@ the identical loop drives both paper fills and real ccxt orders.
 runs, trades, the equity curve and optional feature vectors. High-frequency
 equity samples are committed in batches so the live hot loop never pays a per-bar
 fsync; trades always commit immediately. The dashboard reads trade/equity history
-from this DB.
+from this DB. It also holds the **`observations`** table — live microstructure signals
+(order-book imbalance/spread, Coinbase premium, funding) written continuously by
+`scripts/record_market.py` to build a forward dataset — and `models/experiments.jsonl`
+records every training/validation run's settings + result for auditable tuning.
 
 See `config/config.yaml` for all tunables. API keys come from environment variables
 (`CT_EXCHANGE__API_KEY`, `CT_EXCHANGE__API_SECRET`) or a git-ignored `config/secrets.yaml`
