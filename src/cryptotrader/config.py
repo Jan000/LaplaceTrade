@@ -61,6 +61,9 @@ class DataConfig(BaseModel):
     # Symbols to TRADE concurrently in live/simulation. Empty = just exchange.symbol.
     # Account equity is split equally across them; each needs its own trained model.
     trade_symbols: list[str] = Field(default_factory=list)
+    # Live market recorder: auto-start it when the server boots (records all symbols).
+    recorder_autostart: bool = False
+    recorder_interval: float = 120.0   # seconds between recorder samples
 
     def pool_for(self, primary: str) -> list[str]:
         """Training-pool symbols for ``primary`` (``train_symbols`` minus itself).

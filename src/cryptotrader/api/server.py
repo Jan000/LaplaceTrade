@@ -40,6 +40,18 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.recorder = recorder
     register_management_routes(app, controller)  # /api/config + /api/train
 
+    _COMMON_SYMBOLS_AUTOSTART = ["BTC/USDT", "ETH/USDT", "SOL/USDT", "BNB/USDT",
+                                 "XRP/USDT", "ADA/USDT", "DOGE/USDT", "LTC/USDT"]
+
+    @app.on_event("startup")
+    async def _startup() -> None:
+        if settings.data.recorder_autostart:
+            syms = list(dict.fromkeys([*_COMMON_SYMBOLS_AUTOSTART,
+                                       *(settings.data.trade_symbols or []),
+                                       settings.exchange.symbol]))
+            await recorder.start(syms, settings.data.recorder_interval)
+            logger.info("Recorder auto-started for %d symbols", len(syms))
+
     @app.on_event("shutdown")
     async def _shutdown() -> None:
         await recorder.stop()
@@ -160,7 +172,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def recorder_status() -> JSONResponse:
         counts = await _read_store_all(app.state.settings, lambda s: s.observation_count())
         return JSONResponse({**recorder.status(), "counts": counts,
-                             "total": sum(counts.values())})
+                             "total": sum(counts.values()),
+                             "autostart": app.state.settings.data.recorder_autostart})
 
     @app.post("/api/recorder/start")
     async def recorder_start(body: dict | None = None) -> JSONResponse:

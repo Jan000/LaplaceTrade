@@ -224,6 +224,7 @@
       <div class="spacer"></div>
       <label class="sym">every <input type="number" id="rec-interval" value="120" min="30" step="30" style="width:70px"> s</label>
       <label class="sym"><input type="checkbox" id="rec-all" checked> all symbols</label>
+      <label class="sym" title="Start the recorder automatically when the server boots"><input type="checkbox" id="rec-autostart"> autostart</label>
       <button id="rec-start" class="primary">Start recording</button>
       <button id="rec-stop" class="danger" disabled>Stop</button>
     </div>
@@ -251,6 +252,18 @@
       <select id="an-symbol"></select>
       <select id="an-metric"></select>
       <button id="an-reload" class="ghost">Reload</button>
+    </div>
+    <div class="row" style="flex-wrap:wrap;gap:6px;margin-top:6px">
+      <span class="sym">Range:</span>
+      <span id="an-ranges">
+        <button class="ghost btn-xs" data-h="1">1h</button>
+        <button class="ghost btn-xs" data-h="6">6h</button>
+        <button class="ghost btn-xs" data-h="24">24h</button>
+        <button class="ghost btn-xs" data-h="168">7d</button>
+        <button class="primary btn-xs" data-h="0">All</button>
+      </span>
+      <div class="spacer"></div>
+      <label class="sym"><input type="checkbox" id="an-live" checked> live update</label>
     </div>
     <div style="position:relative;height:300px;margin-top:8px"><canvas id="an-chart"></canvas></div>
     <div id="an-meta" class="sym" style="margin-top:6px"></div>
@@ -1040,13 +1053,21 @@ async function refreshRecorder(){
   try{const s=await fetch("/api/recorder/status").then(r=>r.json());
     $("rec-dot").className="dot "+(s.running?"running":"idle");
     $("rec-start").disabled=s.running; $("rec-stop").disabled=!s.running;
+    if(document.activeElement!==$("rec-autostart")) $("rec-autostart").checked=!!s.autostart;
     const per=Object.entries(s.counts||{}).sort((a,b)=>b[1]-a[1]).map(([k,v])=>`${k}:${v}`).join(" · ");
     $("rec-status").textContent =
       (s.running?`recording ${s.symbols.length} symbols every ${s.interval|0}s`:"stopped")
       + (s.total?` — ${s.total} observations (${per})`:" — no data yet");
     clearInterval(recTimer); recTimer = s.running ? setInterval(refreshRecorder,10000) : null;
+    // live market-analysis: refresh the chart/stats while recording
+    if(s.running && $("an-live").checked && !$("view-experiments").classList.contains("hidden")
+       && $("an-symbol").value) loadAnalysis();
   }catch(e){ $("rec-status").textContent="(status unavailable)"; }
 }
+$("rec-autostart").onchange=async()=>{
+  await fetch("/api/config",{method:"POST",headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({data:{recorder_autostart:$("rec-autostart").checked}})});
+};
 $("rec-start").onclick=async()=>{
   const body={interval:Number($("rec-interval").value)||120};
   if(!$("rec-all").checked && SYM_ROWS.length) body.symbols=SYM_ROWS.map(r=>r.symbol);
@@ -1066,7 +1087,7 @@ const METRIC_LABEL={mid_price:"Mid price",last:"Last price",spread_bps:"Spread (
   avg_trade_size:"Avg trade size",quote_volume_24h:"24h quote volume",pct_change_24h:"24h % change",
   cb_premium:"Coinbase premium",funding_rate:"Funding rate",open_interest:"Open interest"};
 const mlabel=(f)=>METRIC_LABEL[f]||f;
-let anChart=null, AN={};
+let anChart=null, AN={}, anRangeH=0;   // selected range in hours (0 = all)
 function ensureAnChart(){
   if(anChart) return anChart;
   anChart=new Chart($("an-chart"),{type:"line",data:{labels:[],datasets:[{data:[],
@@ -1092,31 +1113,57 @@ async function loadAnalysis(){
   const sym=$("an-symbol").value; if(!sym) return;
   try{
     AN=await fetch(`/api/observations/series?symbol=${encodeURIComponent(sym)}`).then(r=>r.json());
-    const keep=$("an-metric").value;
-    const fields=AN.fields||[];
+    const keep=$("an-metric").value, fields=AN.fields||[];
     $("an-metric").innerHTML=fields.map(f=>`<option value="${f}">${mlabel(f)}</option>`).join("");
     if(fields.includes(keep)) $("an-metric").value=keep;
     else if(fields.includes("mid_price")) $("an-metric").value="mid_price";
-    drawAnalysis();
-    $("an-meta").textContent=`${AN.n} observations · ${AN.series.length?("from "+AN.series[0].timestamp.replace("T"," ").slice(0,16)+" to "+AN.series[AN.series.length-1].timestamp.replace("T"," ").slice(0,16)):""}`;
-    const st=AN.stats||{};
-    $("an-stats").innerHTML = (AN.fields||[]).length ? (AN.fields).map(f=>{
-      const s=st[f]||{}; const d=(f.includes("price")||f.includes("vol")||f==="open_interest")?2:5;
-      return `<tr><td>${mlabel(f)}</td><td>${fmt(s.last,d)}</td><td>${fmt(s.mean,d)}</td>
-        <td>${fmt(s.min,d)}</td><td>${fmt(s.max,d)}</td><td>${fmt(s.std,d)}</td><td>${s.n||0}</td></tr>`;
-    }).join("") : `<tr><td colspan="7" class="flat">No recorded data for ${sym} yet.</td></tr>`;
+    applyAnalysisView();
   }catch(e){ $("an-stats").innerHTML=`<tr><td colspan="7" class="flat">Could not load series.</td></tr>`; }
 }
-function drawAnalysis(){
-  const f=$("an-metric").value, ser=AN.series||[];
-  const c=ensureAnChart();
+function anWindowed(){
+  const ser=AN.series||[]; if(!ser.length || !anRangeH) return ser;   // 0 = all
+  const last=Date.parse(ser[ser.length-1].timestamp), cut=last-anRangeH*3600*1000;
+  return ser.filter(o=>Date.parse(o.timestamp)>=cut);
+}
+function anStatsOf(ser,fields){
+  const out={};
+  for(const f of fields){
+    const v=ser.map(o=>o[f]).filter(x=>typeof x==="number");
+    if(v.length){const m=v.reduce((a,b)=>a+b,0)/v.length,
+      sd=Math.sqrt(v.reduce((a,b)=>a+(b-m)**2,0)/v.length);
+      out[f]={last:v[v.length-1],mean:m,min:Math.min(...v),max:Math.max(...v),std:sd,n:v.length};}
+  }
+  return out;
+}
+function applyAnalysisView(){
+  const ser=anWindowed(), f=$("an-metric").value, c=ensureAnChart();
   c.data.labels=ser.map(o=>(o.timestamp||"").replace("T"," ").slice(5,16));
   c.data.datasets[0].data=ser.map(o=>o[f]!=null?o[f]:null);
-  c.data.datasets[0].label=mlabel(f);
-  c.update("none");
+  c.data.datasets[0].label=mlabel(f); c.update("none");
+  const st=anStatsOf(ser, AN.fields||[]);
+  // window summary derived from mid price: return % and per-bar realized vol.
+  let summary=""; const mids=ser.map(o=>o.mid_price).filter(x=>typeof x==="number");
+  if(mids.length>1){
+    const ret=(mids[mids.length-1]/mids[0]-1)*100, rl=[];
+    for(let i=1;i<mids.length;i++) rl.push(Math.log(mids[i]/mids[i-1]));
+    const mu=rl.reduce((a,b)=>a+b,0)/rl.length;
+    const vol=Math.sqrt(rl.reduce((a,b)=>a+(b-mu)**2,0)/rl.length)*100;
+    summary=` · return ${ret>=0?'+':''}${fmt(ret,2)}% · vol ${fmt(vol,3)}%/bar`;
+  }
+  $("an-meta").textContent=`${ser.length}/${AN.n||0} obs`+
+    (ser.length?` · ${ser[0].timestamp.replace("T"," ").slice(0,16)} → ${ser[ser.length-1].timestamp.replace("T"," ").slice(0,16)}`:"")+summary;
+  $("an-stats").innerHTML = ((AN.fields||[]).length && ser.length) ? (AN.fields).map(f=>{
+    const s=st[f]||{}, d=(f.includes("price")||f.includes("vol")||f==="open_interest")?2:5;
+    return `<tr><td>${mlabel(f)}</td><td>${fmt(s.last,d)}</td><td>${fmt(s.mean,d)}</td>
+      <td>${fmt(s.min,d)}</td><td>${fmt(s.max,d)}</td><td>${fmt(s.std,d)}</td><td>${s.n||0}</td></tr>`;
+  }).join("") : `<tr><td colspan="7" class="flat">No data in range.</td></tr>`;
 }
+document.querySelectorAll("#an-ranges button[data-h]").forEach(b=>b.onclick=()=>{
+  anRangeH=Number(b.dataset.h);
+  document.querySelectorAll("#an-ranges button").forEach(x=>x.className="ghost btn-xs");
+  b.className="primary btn-xs"; applyAnalysisView();});
 $("an-symbol").onchange=loadAnalysis;
-$("an-metric").onchange=drawAnalysis;
+$("an-metric").onchange=applyAnalysisView;
 $("an-reload").onclick=loadAnalysis;
 function renderExperiments(){
   const kindf=$("x-kind").value, q=$("x-search").value.trim().toUpperCase();
