@@ -231,10 +231,27 @@ class LiveTradingEngine:
         self._portfolio.open_position(
             fill, order.stop_distance, order.tp_distance, order.max_hold_bars
         )
+        # Native exchange safety net: if the handler supports it (real ccxt orders),
+        # place a protective stop-loss / take-profit so a stopped bot can't leave the
+        # position unmanaged. Best-effort — never let it break the trading loop.
+        pos = self._portfolio.position
+        if pos is not None and hasattr(self._exec, "place_protective"):
+            try:
+                await self._exec.place_protective(
+                    self._symbol, pos.side, pos.quantity, pos.stop_loss, pos.take_profit)
+            except Exception:  # pragma: no cover - defensive
+                logger.exception("Failed to place protective orders for %s", self._symbol)
 
     async def _exit(self, bar: Bar, reason: str, fill_price: float) -> None:
         pos = self._portfolio.position
         assert pos is not None
+        # Cancel the native protective orders before the engine-driven market exit, so
+        # the exchange's safety-net stop/TP can't also fire (double exit).
+        if hasattr(self._exec, "cancel_protective"):
+            try:
+                await self._exec.cancel_protective(self._symbol)
+            except Exception:  # pragma: no cover - defensive
+                logger.warning("Could not cancel protective orders for %s", self._symbol)
         exit_order = OrderEvent(
             symbol=self._symbol,
             timestamp=bar.timestamp,

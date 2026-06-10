@@ -12,9 +12,12 @@ SAFETY
 * Reads the *actual* filled quantity/price/fee from the exchange response rather
   than assuming the requested values — partial fills and real slippage are
   reflected truthfully.
-* Stop/trailing exits are still driven by the engine (it decides *when* to exit);
-  this handler only translates an exit OrderEvent into a market order. Native
-  exchange stop orders are a deliberate post-MVP enhancement.
+* The engine still decides *when* to exit while it is running. In addition, on every
+  real entry this handler places a **native protective stop-loss** (and take-profit) on
+  the exchange as a safety net, so a *stopped or crashed* bot does not leave a real
+  position unmanaged. On an engine-driven exit the outstanding protective orders are
+  cancelled first. Protective orders are best-effort: a failure to place them is logged
+  loudly but does not block the trade (the engine remains the primary exit driver).
 """
 
 from __future__ import annotations
@@ -45,6 +48,7 @@ class CCXTExecutionHandler:
         self.exchange_cfg = exchange_cfg
         self.execution_cfg = execution_cfg
         self._client: object | None = None
+        self._protective: dict[str, list[str]] = {}  # symbol -> open protective order ids
 
     def _ensure_client(self):
         if self._client is None:
@@ -66,6 +70,48 @@ class CCXTExecutionHandler:
         if self._client is not None and hasattr(self._client, "close"):
             await self._client.close()  # type: ignore[func-returns-value]
             self._client = None
+
+    async def place_protective(
+        self, symbol: str, position_side: Side, quantity: float,
+        stop_price: float, take_profit: float | None = None,
+    ) -> None:
+        """Place native protective orders so a stopped/crashed bot can't leave the
+        position unmanaged. The stop-loss is the critical one; the take-profit is a
+        bonus. Best-effort — failures are logged loudly but never raise."""
+        client = self._ensure_client()
+        await self.cancel_protective(symbol)                 # never stack protective orders
+        close = "sell" if position_side is Side.LONG else "buy"
+        ids: list[str] = []
+        try:
+            r = await client.create_order(  # type: ignore[attr-defined]
+                symbol, "market", close, quantity, None, {"stopLossPrice": stop_price})
+            if r.get("id"):
+                ids.append(r["id"])
+            logger.warning("[LIVE] protective STOP %s %.6f %s @ %.2f", close, quantity, symbol, stop_price)
+        except Exception:
+            logger.exception(
+                "[LIVE] FAILED to place protective stop for %s — position is UNPROTECTED "
+                "if the bot stops. Consider flattening manually.", symbol)
+        if take_profit is not None:
+            try:
+                r = await client.create_order(  # type: ignore[attr-defined]
+                    symbol, "limit", close, quantity, take_profit, {"takeProfitPrice": take_profit})
+                if r.get("id"):
+                    ids.append(r["id"])
+            except Exception:
+                logger.warning("[LIVE] could not place protective take-profit for %s", symbol, exc_info=True)
+        self._protective[symbol] = ids
+
+    async def cancel_protective(self, symbol: str) -> None:
+        """Cancel outstanding protective orders for ``symbol`` (best-effort)."""
+        if self._client is None:
+            self._protective.pop(symbol, None)
+            return
+        for oid in self._protective.pop(symbol, []):
+            try:
+                await self._client.cancel_order(oid, symbol)  # type: ignore[attr-defined]
+            except Exception:
+                pass  # already filled or gone — fine
 
     async def execute(
         self,
