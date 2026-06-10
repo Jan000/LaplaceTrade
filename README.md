@@ -45,39 +45,55 @@ real time over a WebSocket. A **View** selector browses any past run from the
 database (equity, trades and a frozen summary); on a page refresh it seeds from the
 last persisted run so the panel is never blank.
 
-**Symbols tab** — a table of every symbol with its model status, last walk-forward /
-holdout result, average efficiency and realized trade stats, plus per-row controls
-(**Train / Walk-fwd / Holdout / Set active**). Tick **Trade** on several symbols to trade
-them **concurrently**: the engine runs one model per symbol at once and splits account
-equity equally across them (real orders are still gated per symbol by the model guardrail).
-The Monitor then shows aggregate totals plus a per-symbol breakdown.
+**Symbols tab** — a **sortable** table of every symbol with its model status, latest
+walk-forward / holdout result, average efficiency and realized trade stats. (The realized
+columns — trades, win %, PF, efficiency, net PnL — count **paper + real** runs only;
+simulation replays are excluded so they don't drown the decision signal. Sort by any stat
+header to pick what to trade.) Per-row controls launch jobs **without leaving the page**:
+**T+T** (one click = train → walk-forward → holdout in sequence), or individual **Train /
+WF / HO**; a **Train + test all** button pipelines *every* symbol (max 2 at a time). Jobs
+run **concurrently**, each with its own live log (Jobs panel), and the **Status** column
+shows live per-symbol progress (e.g. `⏳ walk-forward… (2/3)`). Tick **Trade** on several
+symbols to trade them **concurrently** — one model per symbol, account equity split
+equally (real orders still gated per symbol by the model guardrail). The Monitor then
+shows aggregate totals plus a per-symbol breakdown.
 
 **Trades & Analytics tab** — pick a source (latest run / **all runs** / any specific
-run) and get a full performance breakdown: 18 stat cards (win rate, profit factor,
-expectancy, avg/largest win & loss, payoff, max drawdown, total fees, avg efficiency,
-avg hold, win/loss streaks, by-side and by-exit-reason), a cumulative-PnL chart, and
-the **complete trade log** — filterable (side, win/loss/break-even, exit reason,
-free-text), sortable by any column, with CSV export.
+run) and an **Environment** filter (simulation / paper / real), and get a full
+performance breakdown: 18 stat cards (win rate, profit factor, expectancy, avg/largest
+win & loss, payoff, max drawdown, total fees, avg efficiency, avg hold, win/loss streaks,
+by-side and by-exit-reason), a cumulative-PnL chart, and the **complete trade log** —
+filterable (side, win/loss/break-even, exit reason, free-text), sortable by any column,
+with CSV export. A **Clear data…** button wipes the persisted runs of the selected
+environment (e.g. reset all simulations) after a confirm — blocked while the engine runs.
 
 **Settings & Training tab**
+* **Model status** — shows whether the trained per-symbol model or the baseline is
+  active for the configured symbol, when it was trained and which symbols were pooled,
+  with a shortcut to the Symbols tab. (Training and walk-forward / holdout now live in
+  the **Symbols** tab — see above — where several run concurrently with live logs.)
 * **All Parameters** — edit and save the entire `config/config.yaml` (every section,
   including `train_symbols` / `drop_features` as comma-separated lists).
+* **Feature modules** — a clear checklist of every optional input group (market breadth,
+  funding rate, cross-asset, higher-timeframe, taker flow, open interest, trend filter)
+  with a one-line description and the tested-evidence note; toggle one and **retrain** the
+  affected symbols to apply (each toggle changes the model's input set).
 * **Exchange API Keys** — enter API key/secret for real trading. They are stored only
   in a git-ignored `config/secrets.yaml` (merged into Settings below env vars,
   `chmod 600` best-effort), are **never** written to `config.yaml` and **never** echoed
   back — the UI shows only set/unset. `/api/config` redacts them too.
-* **Training** — "Train now" runs `scripts/train_model.py` on the saved config with a
-  live log; the model-status line shows whether the trained model or the baseline is
-  active, when it was trained and which symbols were pooled.
-* **Validation** — run **walk-forward** or **holdout** out-of-sample checks
-  (optional `--days`) directly, with live log output. One background job runs at a time.
 
 **Modes (header)**
-* **Simulation** replays held-out/synthetic data through the *paper* handler — offline,
-  no keys.
-* **Live** streams real ccxt market data; *paper* fills by default. Tick the
-  confirm-gated **real orders** toggle (live mode only) to place REAL orders via
-  `CCXTExecutionHandler` — this requires saved API keys and trades live funds.
+* **Simulation** replays data through the *paper* handler — **accelerated** (seconds), no
+  keys. A **test-window** selector picks what to replay: **Held-out (OOS)** slice
+  (default) or the **last 24h / 7 / 14 / 30 / 90 days** of real data — a quick accelerated
+  test of the model on recent history. (Warm-up bars are fetched *before* the window, so
+  they never trade and all trades land inside the requested window.)
+* **Live** streams real ccxt market data in **real time** — it only acts when a candle
+  **closes**, so on 4h the next decision can be up to 4 h away (the header says
+  *"live — waits for the next bar to close"*). *Paper* fills by default; tick the
+  confirm-gated **real orders** toggle (live mode only) to place REAL orders via the ccxt
+  execution handler — this requires saved API keys and trades live funds.
 
 ## Using it as a trader — step by step
 
@@ -93,16 +109,19 @@ separately, so test runs never pollute your real track record.
    `risk.account_equity` (your starting capital), `risk.risk_per_trade` (e.g. 0.005 =
    0.5%/trade), `risk.max_leverage` (keep 1.0 to start) — and `execution.taker_fee` /
    `slippage_bps` to match your exchange tier. **Save to config.yaml**.
-3. **Train** — set an optional **Target symbol** (blank = configured symbol) and click
-   **Train now**. Each coin gets its own model file `models/model_<SYMBOL>.pkl` plus a
-   metadata sidecar; wait until the model-status line shows a matching *trained* model.
-   (Re-train after any feature/model/barrier change.)
-4. **Validate** — run **walk-forward** (and **holdout**) for the same target. Only go
-   further if the verdict is ROBUST / positive out of sample. This is your edge check.
-5. **Simulate (fast, real data)** — switch to the **Simulation** mode and **Start**: it
-   replays the held-out real slice through the live engine in seconds. Watch *Trades &
-   Analytics* (Environment = Simulation). This is the quick way to *see* behaviour —
-   far more useful than waiting in real time on Live data.
+3. **Train & test in one click** (Symbols tab) — find your symbol and click **T+T**
+   (train → walk-forward → holdout), or **Train + test all** to pipeline every symbol.
+   Each coin gets its own model file `models/model_<SYMBOL>.pkl` plus a metadata sidecar;
+   the **Status** column shows live progress and the table fills in once done.
+   (Re-train after any feature/model/barrier change — the model stores its own input set.)
+4. **Pick the edge** — sort the table by **Walk-fwd** / **Holdout**. Only trade a symbol
+   whose walk-forward is **ROBUST** and whose holdout is positive (see *Validation* below
+   for exactly what each measures). The edge is strongest on BTC.
+5. **Simulate (fast, real data)** — switch to **Simulation** and **Start**. The
+   **test-window** selector replays either the held-out OOS slice (default) or the
+   **last 24h / 7 / 14 / 30 / 90 days** of real data through the engine in seconds. Watch
+   *Trades & Analytics* (Environment = Simulation). This is the quick way to *see*
+   behaviour — far more useful than waiting in real time on Live data.
 5b. **Paper-test on live data** (optional) — mode **Live**, **real orders OFF**, **Start**:
    confirms the real-time plumbing (connectivity, the price appears immediately via
    warm-up). On higher timeframes the next decision only comes when a candle closes.
@@ -142,8 +161,9 @@ equity samples are committed in batches so the live hot loop never pays a per-ba
 fsync; trades always commit immediately. The dashboard reads trade/equity history
 from this DB.
 
-See `config/config.yaml` for all tunables. API keys come from environment
-variables (`CT_EXCHANGE__API_KEY`, `CT_EXCHANGE__API_SECRET`), never from disk.
+See `config/config.yaml` for all tunables. API keys come from environment variables
+(`CT_EXCHANGE__API_KEY`, `CT_EXCHANGE__API_SECRET`) or a git-ignored `config/secrets.yaml`
+(written by the dashboard) — **never** from `config.yaml`, and never echoed back.
 
 ## Training the model
 
@@ -166,7 +186,8 @@ what the shipped defaults are.
 3. **Chronological split** into train / held-out test (`model.test_fraction`,
    default 0.25). No shuffling — evaluation never sees the past's future.
 4. **Features** — the backward-looking micro-structure matrix (`FeatureConfig`),
-   minus `model.drop_features` (low-importance features pruned for robustness).
+   minus `model.drop_features` (low-importance features pruned for robustness), plus the
+   enabled **external modules** (see *Feature modules* below — funding + breadth are on).
 5. **Labels** — the **triple-barrier** method with **symmetric** label barriers
    (`barriers.label_tp_mult` / `label_sl_mult`) so the direction target is unbiased,
    plus average-uniqueness sample weights for overlapping labels. (Trade *exits* use
@@ -174,39 +195,73 @@ what the shipped defaults are.
 6. **Train** a **seed-ensemble** of `model.ensemble_size` LightGBM models (different
    seeds + bagging) and average them, to cancel the seed/sampling variance that
    dominates a few-thousand-row training set.
-7. **Save & evaluate** — writes `models/model.pkl` (+ `models/holdout.parquet`) and
-   prints a model-vs-baseline backtest on the untouched held-out slice.
+7. **Save & evaluate** — writes the **per-symbol** model `models/model_<SYMBOL>.pkl` (+ a
+   `.meta.json` sidecar recording symbol/timeframe/pooled-symbols/feature-set, and a
+   per-symbol `holdout_<SYMBOL>.parquet`) and prints a model-vs-baseline backtest on the
+   untouched held-out slice.
 
 ```bash
 python scripts/train_model.py                 # uses config/config.yaml (4h, pool ETH)
+python scripts/train_model.py --symbol ETH/USDT   # train a specific coin
 python scripts/train_model.py --days 365      # override history window
 python scripts/train_model.py --synthetic     # offline smoke test, no network
 ```
 
-`strategy.model_path: models/model.pkl` is already set, so once a model exists the
-dashboard's **live/simulation** engine loads it automatically on start (it falls
-back to the momentum baseline while no model file is present).
+Models are stored **per symbol**, so each coin has its own model side by side. The
+engine resolves `models/model_<SYMBOL>.pkl` for the configured/traded symbol on start
+(falling back to the momentum baseline when no model file is present), and a metadata
+guardrail refuses REAL orders unless the loaded model was trained for that exact
+symbol + timeframe.
 
-### Validate before you trust it — the walk-forward
+### Validation: walk-forward (WF) & holdout (HO) — how they work
 
-A single train/test split is one sample and easy to fool. The honest test is
-**walk-forward** (anchored, expanding window; retrain per fold; never tuned per
-fold):
+A single train/test split is one sample and easy to fool. Two complementary
+out-of-sample tests decide whether an edge is real. **Both retrain from scratch** (no
+tuning on the test data) and slice any pooled symbols to the same cutoff timestamp, so
+nothing leaks. In the dashboard the **Symbols** table shows each symbol's latest WF/HO
+result and the per-row **WF / HO** (or one-click **T+T**) buttons run them; the CLI does
+the same:
 
 ```bash
-python scripts/walkforward.py                 # 5 OOS folds on the shipped config
+python scripts/walkforward.py                 # anchored expanding-window WF (5 OOS folds)
+python scripts/holdout.py                      # single-split out-of-time + cross-asset HO
+python scripts/walkforward.py --symbol ETH/USDT --splits 6 --train-frac 0.4
 ```
 
-It prints per-fold return / PF / win% / drawdown and a verdict
-(`ROBUST` / `MIXED` / `NOT ROBUST`). The shipped config is **ROBUST**:
-**+16.1 % compounded OOS, PF 1.45, 4–5 of 5 folds positive, max drawdown < 5 %**
-on 4h BTC with ETH pooled.
+**Walk-forward — anchored, expanding window.** Take the full history (≈730 days). The
+first `--train-frac` (0.5) is the initial training window; the rest is cut into
+`--splits` (5) equal out-of-sample folds. For each fold the script:
 
-For an even stricter check, `scripts/holdout.py` trains **once** on the oldest 70 %
-and tests the untouched recent 30 % of *several* assets — including SOL/BNB/XRP/ADA
-that were never in training. On the current config BTC holds out-of-time (**+6.5 %**)
-but cross-asset is mixed: the edge is strongest on BTC and is **regime/asset
-dependent**, not a universal crypto effect. Deploy on BTC with measured expectations.
+1. **trains** a fresh seed-ensemble on everything from the start up to the fold boundary,
+2. **tests** it on the next untouched block — the engine trades that block exactly as
+   live would (same features, barriers, costs), and
+3. **expands** the training window to include that block and repeats.
+
+The model is retrained every fold and never sees its test data. It prints per-fold
+return / PF / trades / win % / max-drawdown, then a summary that **compounds** the fold
+returns (as if traded in sequence) and counts positive folds. **Verdict:** `ROBUST`
+(≥ `splits−1` folds positive **and** compounded > 0), `MIXED` (positive overall but
+unstable), or `NOT ROBUST`. WF answers: *does the edge keep generalising over time under
+periodic retraining?* — exactly the recommended deploy-and-retrain workflow.
+
+**Holdout — one split, two strict checks.** `scripts/holdout.py`:
+
+1. **Out-of-time:** split the history **once** at `--train-frac` (0.7). Train on the
+   oldest 70 %, test on the most recent contiguous 30 % the model has **never** seen —
+   the toughest "what happens next on truly recent data" check.
+2. **Out-of-asset (cross-asset):** take that *same* primary-trained model, unchanged, and
+   run it on coins that were **never in training** (e.g. SOL/BNB/XRP/ADA). If the edge
+   survives on unseen assets it's a general micro-structure effect; if only the primary
+   holds, the edge is **asset/regime specific**.
+
+**WF stresses time** (many rolling retrains); **HO stresses the most recent unseen period
+and unseen assets.** Trust a config only when WF is `ROBUST` **and** the primary's HO is
+positive. On 4h BTC with ETH pooled (+ funding/breadth) the walk-forward is consistently
+**ROBUST** and BTC holds out-of-time; cross-asset is mixed — the edge is **strongest on
+BTC** and is regime/asset dependent, not a universal crypto effect. Note the numbers are
+**window-sensitive** (a one-day shift of the 730-day window has moved BTC WF between
+~+11 % and ~+18 %), so judge by the *verdict* and PF, not a single headline figure, and
+re-validate after any change.
 
 ### How much history? More is *not* better
 
@@ -233,36 +288,34 @@ set. New market data therefore enters the model only when you **retrain**.
 
 **Recommended cadence:** retrain periodically on a rolling window (e.g. weekly or
 monthly) — exactly what the walk-forward simulates — then restart the engine to pick
-up the fresh `models/model.pkl`. Re-run `walkforward.py` after any change to confirm
-the edge still generalises before going live.
+up the fresh `models/model_<SYMBOL>.pkl`. Re-run the walk-forward after any change to
+confirm the edge still generalises before going live.
 
 ### Model lifecycle — retraining overwrites; config changes need a retrain
 
-* Each training **overwrites** `models/model.pkl` (and `holdout.parquet`) in place —
-  no versioning, nothing to delete by hand to retrain. (Keep a manual copy if you
-  want history; `models/` is git-ignored as a build artifact.)
-* The model is **not** auto-invalidated when you change config. A saved model stores
-  its own feature list, so after changing `features`, `drop_features`, `barriers`,
-  `train_symbols`, timeframe, etc. you **must retrain** — otherwise the engine keeps
-  serving the stale model. Treat "edit config → retrain → re-validate → restart" as
-  one atomic loop.
+* Each training **overwrites** that symbol's `models/model_<SYMBOL>.pkl` (and
+  `holdout_<SYMBOL>.parquet`, `.meta.json`) in place — no versioning, nothing to delete
+  by hand to retrain. (`models/` is git-ignored as a build artifact.)
+* The model is **not** auto-invalidated when you change config. A saved model stores its
+  own feature list, so after changing `features` (including the feature modules),
+  `drop_features`, `barriers`, `train_symbols`, timeframe, etc. you **must retrain** —
+  otherwise the engine keeps serving the stale model. Treat "edit config → retrain →
+  re-validate → restart" as one atomic loop.
 
 ### Managing it all from the dashboard
 
-Open **Settings & Training** in the dashboard:
+The whole lifecycle is operable from the UI:
 
-* **Edit & save the entire config** (`exchange`, `data`, `features`, `model`, `risk`,
-  `execution`, `strategy`, `barriers`) straight to `config/config.yaml` — including
-  `train_symbols` and `drop_features` (entered as comma-separated lists).
-* **Train now** launches `scripts/train_model.py` as a background job using the saved
-  config, with live log tail and status. One run at a time.
-* After it finishes, **Stop/Start** the engine so it reloads the new model.
+* **Settings & Training → All Parameters** — edit & save the entire config (`exchange`,
+  `data`, `features`, `model`, `risk`, `execution`, `strategy`, `barriers`) straight to
+  `config/config.yaml`, including `train_symbols` and `drop_features` (comma-separated).
+* **Settings & Training → Feature modules** — flip optional input groups on/off.
+* **Symbols tab** — **Train / WF / HO** per symbol, **T+T** (full pipeline) or **Train +
+  test all**; jobs run **concurrently**, each with a live log, and progress shows in the
+  table. After training, **Stop/Start** the engine so it reloads the new model.
 
-What the dashboard does **not** (yet) expose: per-run CLI overrides (`--days`,
-`--symbol`) — it always trains on the saved config — and it does not run the
-walk-forward / holdout validators (use the CLI for those). API keys are never shown
-or written to `config.yaml`; they come from `CT_EXCHANGE__API_KEY` /
-`CT_EXCHANGE__API_SECRET`.
+API keys are never shown or written to `config.yaml`; they live in git-ignored
+`config/secrets.yaml` (or `CT_EXCHANGE__API_KEY` / `CT_EXCHANGE__API_SECRET`).
 
 > Note: on a pure random walk (synthetic data) no strategy can be profitable — the
 > edge must come from real micro-structure. Training lets the model *find* it; the
@@ -290,6 +343,29 @@ fracdiff order/window, …), **`model`** (all LightGBM hyperparameters +
 control: `max_leverage`, `min_edge_cost_ratio`, `cooldown_bars`), `execution`
 (fees/slippage), `strategy` (entry thresholds), **`barriers`** (`tp_mult`,
 `sl_mult`, `horizon` — shared by labels *and* exits).
+
+### Feature modules (optional external inputs)
+
+Beyond the price/volume indicators, the model can pull in extra, orthogonal data. Each is
+a `features.use_*` flag (toggle in the dashboard's **Feature modules** card, then retrain).
+Every one was tested in the walk-forward; only those that **robustly** helped are on by
+default — adding inputs otherwise overfits the small 4h sample.
+
+| Module | Source | Status | Why |
+|--------|--------|--------|-----|
+| **Market breadth** (`use_breadth`) | basket of alts (ETH/SOL/BNB/XRP) | **ON** | avg return, % positive & BTC-vs-market — market-wide flow |
+| **Funding rate** (`use_funding`) | Binance USDⓈ-M futures (free) | **ON** | perp positioning / sentiment, full history |
+| Cross-asset (`use_cross_asset`) | one second symbol | off | overfit / redundant with pooling |
+| Higher-timeframe (`use_htf`) | daily trend/RSI/return | off | didn't help on 4h |
+| Taker flow (`use_taker_flow`) | Binance klines | off | no robust gain |
+| Open interest (`use_open_interest`) | Binance futures | off | Binance caps OI history at ~30 days (flat for training) |
+| Fear & Greed (`use_fear_greed`) | alternative.me (free daily) | off | too coarse (daily) & redundant with momentum |
+
+Funding/OI use a **free Binance USDⓈ-M futures** client automatically (no extra keys).
+The **funding + breadth combination** is the one that passed a multi-fold-structure
+robustness check (both folds positive, profit factor up) and is enabled in the shipped
+config; the rest are kept available but off. Mapping is **leak-free** (daily/8h sources
+use only the last *completed* value, forward-filled onto the bars).
 
 ### Tuning toward profitability
 
