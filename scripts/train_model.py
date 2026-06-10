@@ -256,6 +256,8 @@ def main() -> None:
             "Saved META-LABELED model to %s (meta acc=%.3f, base win-rate=%.3f)",
             out_path, info["meta_train_accuracy"], info["primary_win_base_rate"],
         )
+        train_result = {"val_accuracy": round(float(info["meta_train_accuracy"]), 4),
+                        "meta_labeling": True}
     else:
         from cryptotrader.ml.model import build_ensemble
 
@@ -266,6 +268,8 @@ def main() -> None:
         logger.info("Saved %d-member model to %s (val_accuracy=%.3f, temperature=%.3f)",
                     max(1, settings.model.ensemble_size), out_path,
                     metrics["val_accuracy"], temp)
+        train_result = {"val_accuracy": round(float(metrics["val_accuracy"]), 4),
+                        "temperature": round(float(temp), 3)}
 
     # Metadata sidecar — powers the dashboard's symbol guardrail.
     write_meta(out_path, {
@@ -278,6 +282,13 @@ def main() -> None:
         "barriers": {"tp_mult": settings.barriers.tp_mult, "sl_mult": settings.barriers.sl_mult,
                      "horizon": settings.barriers.horizon},
     })
+
+    # Experiment log: which settings produced this model (auditable tuning history).
+    if not args.synthetic:
+        from cryptotrader.ml.experiments import log_experiment
+
+        train_result["n_train_rows"] = int(len(train_feats))
+        log_experiment("train", settings.exchange.symbol, settings, train_result)
 
     # --- Persist the held-out slice for the dashboard (per symbol) ---------
     replay_path = holdout_path_for(settings.exchange.symbol, out_path.parent)

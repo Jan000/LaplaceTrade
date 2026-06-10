@@ -76,6 +76,27 @@ def test_runs_keys_and_jobs(tmp_path, monkeypatch) -> None:
         assert client.post("/api/job", json={"kind": "bogus"}).status_code == 400
 
 
+def test_experiments_log_and_endpoint(tmp_path, monkeypatch) -> None:
+    """Experiment records round-trip and /api/experiments serves them (newest first)."""
+    import cryptotrader.ml.registry as registry
+    from cryptotrader.ml.experiments import log_experiment, read_experiments
+
+    monkeypatch.setattr(registry, "MODELS_DIR", tmp_path / "models")
+    s = Settings()
+    log_experiment("walkforward", "BTC/USDT", s, {"compounded_return_pct": 11.1, "verdict": "ROBUST"})
+    log_experiment("train", "ETH/USDT", s, {"val_accuracy": 0.51})
+    rows = read_experiments()
+    assert len(rows) == 2 and rows[0]["symbol"] == "ETH/USDT"            # newest first
+    assert "use_calibration" in rows[0]["config"] and "label_method" in rows[0]["config"]
+
+    settings = Settings()
+    settings.persistence.db_path = tmp_path / "x.sqlite"
+    app = create_app(settings)
+    with TestClient(app) as client:
+        served = client.get("/api/experiments").json()
+        assert isinstance(served, list) and served[0]["kind"] == "train"
+
+
 def test_clear_runs_endpoint(tmp_path) -> None:
     """/api/runs/clear wipes the selected environment (no keys reload to keep the db_path)."""
     settings = Settings()

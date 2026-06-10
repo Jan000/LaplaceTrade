@@ -268,20 +268,25 @@ def main() -> None:
 
     # Persist a machine-readable summary so the dashboard's Symbols tab can show it.
     if not args.synthetic:
+        result = {
+            "timeframe": args.timeframe or settings.exchange.timeframe,
+            "compounded_return_pct": round(compounded, 2),
+            "mean_fold_return_pct": round(mean_r, 2),
+            "mean_profit_factor": round(mean_pf, 3),
+            "positive_folds": int(pos_folds), "splits": int(args.splits),
+            "robust": bool(pos_folds >= args.splits - 1 and compounded > 0),
+            "verdict": verdict,
+        }
+        sym = args.symbol or settings.exchange.symbol
         try:
             from cryptotrader.ml.registry import write_validation
 
-            write_validation("walkforward", args.symbol or settings.exchange.symbol, {
-                "timeframe": args.timeframe or settings.exchange.timeframe,
-                "compounded_return_pct": round(compounded, 2),
-                "mean_fold_return_pct": round(mean_r, 2),
-                "mean_profit_factor": round(mean_pf, 3),
-                "positive_folds": int(pos_folds), "splits": int(args.splits),
-                "robust": bool(pos_folds >= args.splits - 1 and compounded > 0),
-                "verdict": verdict,
-            })
+            write_validation("walkforward", sym, result)
         except Exception:
             logger.warning("Could not persist walk-forward result.", exc_info=True)
+        from cryptotrader.ml.experiments import log_experiment
+
+        log_experiment("walkforward", sym, settings, result)
 
 
 if __name__ == "__main__":

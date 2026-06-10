@@ -93,6 +93,7 @@
     <button id="tab-monitor" class="primary">Monitor</button>
     <button id="tab-symbols" class="ghost">Symbols</button>
     <button id="tab-trades" class="ghost">Trades &amp; Analytics</button>
+    <button id="tab-experiments" class="ghost">Experiments</button>
     <button id="tab-settings" class="ghost">Settings &amp; Training</button>
   </nav>
 </header>
@@ -204,6 +205,33 @@
   </div>
 </main>
 
+<!-- ============ EXPERIMENTS ============ -->
+<main id="view-experiments" class="hidden">
+  <div class="card wide">
+    <div class="row" style="flex-wrap:wrap">
+      <h2 style="margin:0">Experiments</h2>
+      <span class="sym">— every train / walk-forward / holdout run with its settings &amp; result</span>
+      <div class="spacer"></div>
+      <select id="x-kind"><option value="">All kinds</option><option value="walkforward">Walk-forward</option><option value="holdout">Holdout</option><option value="train">Train</option></select>
+      <input type="text" id="x-search" placeholder="filter symbol…" style="width:140px">
+      <button id="x-reload" class="ghost">Reload</button>
+    </div>
+    <div class="tbl-wrap" style="max-height:600px">
+      <table id="x-table">
+        <thead><tr>
+          <th data-k="ts">Time</th><th data-k="kind">Kind</th><th data-k="symbol">Symbol</th>
+          <th data-k="_result">Result</th><th data-k="_pf">PF</th>
+          <th data-k="tf">TF</th><th data-k="label">Labels</th><th data-k="pool">Pool</th>
+          <th>Modules</th><th>Model</th>
+        </tr></thead>
+        <tbody id="x-rows"><tr><td colspan="10" class="flat">Loading…</td></tr></tbody>
+      </table>
+    </div>
+    <div class="sym" style="font-size:11.5px;margin-top:6px">Click a row to see the full config &amp; result JSON. Sort by any column to compare what each setting changed.</div>
+    <pre id="x-detail" class="joblog hidden" style="margin-top:8px"></pre>
+  </div>
+</main>
+
 <!-- ============ SETTINGS & TRAINING ============ -->
 <main id="view-settings" class="hidden">
 
@@ -264,7 +292,7 @@ const fmt=(n,d=2)=>(n??0).toLocaleString(undefined,{minimumFractionDigits:d,maxi
 const sign=(n)=>n>0?"pos":n<0?"neg":"";
 
 /* ---------- view switching ---------- */
-const TABS=["monitor","symbols","trades","settings"];
+const TABS=["monitor","symbols","trades","experiments","settings"];
 function showTab(name){
   for(const t of TABS){
     $("view-"+t).classList.toggle("hidden",t!==name);
@@ -273,10 +301,12 @@ function showTab(name){
   if(name==="settings"){loadConfig(); loadModel(); loadKeys(); loadFeatures();}
   if(name==="trades"){refreshRunSelectors(); loadTrades();}
   if(name==="symbols"){loadSymbols(); refreshJobs();}
+  if(name==="experiments"){loadExperiments();}
 }
 $("tab-monitor").onclick=()=>showTab("monitor");
 $("tab-symbols").onclick=()=>showTab("symbols");
 $("tab-trades").onclick=()=>showTab("trades");
+$("tab-experiments").onclick=()=>showTab("experiments");
 $("tab-settings").onclick=()=>showTab("settings");
 
 /* ---------- monitor ---------- */
@@ -957,6 +987,58 @@ $("sym-reload").onclick=loadSymbols;
 $("sym-train-all").onclick=()=>{
   if(confirm(`Train + walk-forward + holdout for all ${SYM_ROWS.length} symbols? Runs ${PIPE_CAP} at a time; watch progress in the Status column and the Jobs panel.`))
     startPipelineAll();};
+
+/* ---------- experiments (settings -> result history) ---------- */
+let XROWS=[], XVIEW=[], xSort={k:"ts",dir:-1};
+const xnum=(r)=> r.kind==="walkforward"?r.result.compounded_return_pct
+  : r.kind==="holdout"?r.result.return_pct
+  : (r.result.val_accuracy!=null? r.result.val_accuracy*100 : null);
+const xpf=(r)=> r.kind==="walkforward"?r.result.mean_profit_factor
+  : r.kind==="holdout"?r.result.profit_factor : null;
+async function loadExperiments(){
+  try{ XROWS=await fetch("/api/experiments?limit=400").then(r=>r.json()); renderExperiments(); }
+  catch(e){ $("x-rows").innerHTML=`<tr><td colspan="10" class="flat">Could not load experiments.</td></tr>`; }
+}
+function renderExperiments(){
+  const kindf=$("x-kind").value, q=$("x-search").value.trim().toUpperCase();
+  let rows=XROWS.filter(r=>(!kindf||r.kind===kindf)&&(!q||(r.symbol||"").toUpperCase().includes(q)));
+  rows.forEach(r=>{const c=r.config||{}; r._result=xnum(r); r._pf=xpf(r);
+    r.tf=c.timeframe; r.label=c.label_method; r.pool=(c.train_symbols||[]).join(",");});
+  const k=xSort.k,d=xSort.dir;
+  rows.sort((a,b)=>{let x=a[k],y=b[k]; if(x==null)return 1; if(y==null)return -1;
+    return (typeof x==="number"?x-y:String(x).localeCompare(String(y)))*d;});
+  XVIEW=rows;
+  $("x-rows").innerHTML = rows.length ? rows.map((r,i)=>{
+    const c=r.config||{}, res=r._result;
+    const resStr = r.kind==="train" ? (res!=null?`acc ${fmt(res,1)}%`:"—")
+      : (res!=null?`${res>=0?'+':''}${fmt(res,1)}%`:"—");
+    const folds = (r.kind==="walkforward"&&r.result.positive_folds!=null)?` (${r.result.positive_folds}/${r.result.splits})`:"";
+    const rescol = r.kind==="train"?"" : (res>0?"pos":res<0?"neg":"");
+    const mods=[c.use_funding&&"fund",c.use_breadth&&"breadth",c.use_calibration&&"cal",
+      c.use_cross_asset&&"cross",c.use_htf&&"htf",c.use_taker_flow&&"taker",
+      c.use_open_interest&&"oi",c.use_fear_greed&&"fng"].filter(Boolean).join(" ");
+    const model = (r.kind==="train"&&r.result.temperature!=null)
+      ? `T=${r.result.temperature}, ${c.ensemble_size}×` : `${c.ensemble_size}× lr${c.learning_rate}`;
+    return `<tr data-i="${i}" style="cursor:pointer">
+      <td class="reason">${(r.ts||"").replace("T"," ").slice(0,16)}</td>
+      <td>${r.kind}</td><td><b>${r.symbol||""}</b></td>
+      <td class="${rescol}">${resStr}${folds}</td>
+      <td>${r._pf!=null?fmt(r._pf,2):"—"}</td>
+      <td>${r.tf||""}</td><td title="${c.label_method||""}">${c.label_method==="trend_scan"?"TS":"TB"}</td>
+      <td class="reason">${r.pool||"—"}</td>
+      <td class="reason" style="font-size:11px">${mods||"—"}</td>
+      <td class="reason" style="font-size:11px">${model}</td></tr>`;
+  }).join("") : `<tr><td colspan="10" class="flat">No experiments yet — run Train / WF / HO.</td></tr>`;
+  $("x-rows").querySelectorAll("tr[data-i]").forEach(tr=>tr.onclick=()=>{
+    const r=XVIEW[+tr.dataset.i]; const el=$("x-detail");
+    el.textContent=JSON.stringify({config:r.config,result:r.result},null,2);
+    el.classList.remove("hidden");});
+}
+document.querySelectorAll("#x-table th[data-k]").forEach(th=>th.onclick=()=>{
+  const k=th.dataset.k; xSort=(xSort.k===k)?{k,dir:-xSort.dir}:{k,dir:-1}; renderExperiments();});
+$("x-reload").onclick=loadExperiments;
+$("x-kind").onchange=renderExperiments;
+$("x-search").oninput=renderExperiments;
 
 /* ---------- init ---------- */
 refreshRunSelectors();

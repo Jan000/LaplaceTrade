@@ -100,6 +100,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                              "trade_symbols": sorted(trade_set),
                              "trade_count": len(active_set), "real_ok": real_ok})
 
+    @app.get("/api/experiments")
+    async def experiments(limit: int = 300) -> JSONResponse:
+        """Append-only history of training / walk-forward / holdout runs (settings + result)."""
+        from cryptotrader.ml.experiments import read_experiments
+
+        return JSONResponse(read_experiments(limit))
+
     @app.get("/api/model")
     async def model_info() -> JSONResponse:
         """Which model the engine will load for the configured symbol, and whether it matches."""
