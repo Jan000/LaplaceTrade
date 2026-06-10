@@ -79,9 +79,8 @@ async def load_extra_symbols(settings: Settings, args: argparse.Namespace) -> di
         return out
     days = args.days if args.days is not None else settings.data.history_days
     start = datetime.now(tz=timezone.utc) - timedelta(days=days)
-    for sym in settings.data.train_symbols:
-        if sym == (args.symbol or settings.exchange.symbol):
-            continue
+    primary = args.symbol or settings.exchange.symbol
+    for sym in settings.data.pool_for(primary):
         feed = MarketDataFeed(
             exchange_id=args.exchange or settings.exchange.id, symbol=sym,
             timeframe=args.timeframe or settings.exchange.timeframe,

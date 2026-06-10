@@ -118,9 +118,7 @@ async def load_extra_symbols(settings: Settings, args: argparse.Namespace) -> di
     days = args.days if args.days is not None else settings.data.history_days
     start = datetime.now(tz=timezone.utc) - timedelta(days=days)
     primary = args.symbol or settings.exchange.symbol
-    for sym in settings.data.train_symbols:
-        if sym == primary:
-            continue
+    for sym in settings.data.pool_for(primary):
         feed = MarketDataFeed(
             exchange_id=args.exchange or settings.exchange.id, symbol=sym,
             timeframe=settings.exchange.timeframe, cache_dir=settings.data.cache_dir,
@@ -220,7 +218,8 @@ def main() -> None:
         return feats.loc[valid], labels.loc[valid], w.loc[valid]
 
     train_frames = [train_ohlcv]
-    if not args.synthetic and settings.data.train_symbols:
+    primary = args.symbol or settings.exchange.symbol
+    if not args.synthetic and settings.data.pool_for(primary):
         cutoff_ts = ohlcv.index[split] if split < len(ohlcv) else ohlcv.index[-1]
         extra = asyncio.run(load_extra_symbols(settings, args))
         for df in extra.values():

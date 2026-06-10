@@ -62,6 +62,20 @@ class DataConfig(BaseModel):
     # Account equity is split equally across them; each needs its own trained model.
     trade_symbols: list[str] = Field(default_factory=list)
 
+    def pool_for(self, primary: str) -> list[str]:
+        """Training-pool symbols for ``primary`` (``train_symbols`` minus itself).
+
+        A symbol that equals the only configured pool symbol (e.g. ETH when
+        train_symbols=[ETH]) would otherwise train **un-augmented** — empirically the
+        worst case. So when pooling is intended but the primary collides with it, fall
+        back to the market leader (BTC for alts, ETH for BTC), never leaving it empty.
+        An explicitly empty ``train_symbols`` (no pooling intended) is respected.
+        """
+        pool = [s for s in self.train_symbols if s != primary]
+        if pool or not self.train_symbols:
+            return pool
+        return ["ETH/USDT"] if primary == "BTC/USDT" else ["BTC/USDT"]
+
 
 class FeatureConfig(BaseModel):
     """Every indicator window — fully tunable. Names match the engine kwargs."""
