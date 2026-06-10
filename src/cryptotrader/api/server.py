@@ -121,6 +121,41 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         counts = await _read_store_all(app.state.settings, lambda s: s.observation_count())
         return JSONResponse({"counts": counts, "total": sum(counts.values())})
 
+    @app.get("/api/observations/series")
+    async def observation_series(symbol: str, limit: int = 3000) -> JSONResponse:
+        """Recorded observation time series for one symbol + per-metric summary stats."""
+        import json as _json
+        import statistics as _st
+
+        rows = await _read_store_all(
+            app.state.settings, lambda s: s.get_observations(symbol, limit))
+        typed = ("mid_price", "spread_bps", "ob_imbalance", "cb_premium", "funding_rate")
+        series: list[dict] = []
+        for r in reversed(rows):                          # store returns newest-first -> ASC
+            rec = {"timestamp": r["timestamp"]}
+            for c in typed:
+                if r[c] is not None:
+                    rec[c] = r[c]
+            if r.get("metrics"):
+                try:
+                    rec.update(_json.loads(r["metrics"]))
+                except Exception:
+                    pass
+            series.append(rec)
+        fields = sorted({k for o in series for k, v in o.items()
+                         if k != "timestamp" and isinstance(v, (int, float))})
+        stats = {}
+        for f in fields:
+            vals = [o[f] for o in series if isinstance(o.get(f), (int, float))]
+            if vals:
+                stats[f] = {
+                    "last": vals[-1], "mean": _st.fmean(vals),
+                    "min": min(vals), "max": max(vals),
+                    "std": _st.pstdev(vals) if len(vals) > 1 else 0.0, "n": len(vals),
+                }
+        return JSONResponse({"symbol": symbol, "n": len(series),
+                             "fields": fields, "series": series, "stats": stats})
+
     @app.get("/api/recorder/status")
     async def recorder_status() -> JSONResponse:
         counts = await _read_store_all(app.state.settings, lambda s: s.observation_count())

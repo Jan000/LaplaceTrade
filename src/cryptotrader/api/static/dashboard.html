@@ -241,6 +241,26 @@
     <div class="sym" style="font-size:11.5px;margin-top:6px">Click a row to see the full config &amp; result JSON. Sort by any column to compare what each setting changed.</div>
     <pre id="x-detail" class="joblog hidden" style="margin-top:8px"></pre>
   </div>
+
+  <!-- Per-symbol analysis of the recorded live data -->
+  <div class="card wide">
+    <div class="row" style="flex-wrap:wrap">
+      <h2 style="margin:0">Symbol analysis</h2>
+      <span class="sym">— recorded live microstructure history per symbol</span>
+      <div class="spacer"></div>
+      <select id="an-symbol"></select>
+      <select id="an-metric"></select>
+      <button id="an-reload" class="ghost">Reload</button>
+    </div>
+    <div style="position:relative;height:300px;margin-top:8px"><canvas id="an-chart"></canvas></div>
+    <div id="an-meta" class="sym" style="margin-top:6px"></div>
+    <div class="tbl-wrap" style="max-height:340px;margin-top:6px">
+      <table id="an-table">
+        <thead><tr><th>Metric</th><th>Last</th><th>Mean</th><th>Min</th><th>Max</th><th>Std</th><th>n</th></tr></thead>
+        <tbody id="an-stats"><tr><td colspan="7" class="flat">Pick a symbol with recorded data.</td></tr></tbody>
+      </table>
+    </div>
+  </div>
 </main>
 
 <!-- ============ SETTINGS & TRAINING ============ -->
@@ -1012,6 +1032,7 @@ async function loadExperiments(){
   try{ XROWS=await fetch("/api/experiments?limit=400").then(r=>r.json()); renderExperiments(); }
   catch(e){ $("x-rows").innerHTML=`<tr><td colspan="10" class="flat">Could not load experiments.</td></tr>`; }
   refreshRecorder();
+  loadAnalysisSymbols();
 }
 /* ---------- live recorder control ---------- */
 let recTimer=null;
@@ -1035,6 +1056,68 @@ $("rec-start").onclick=async()=>{
 };
 $("rec-stop").onclick=async()=>{ $("rec-stop").disabled=true;
   await fetch("/api/recorder/stop",{method:"POST"}); refreshRecorder(); };
+
+/* ---------- per-symbol analysis of recorded live data ---------- */
+const METRIC_LABEL={mid_price:"Mid price",last:"Last price",spread_bps:"Spread (bps)",
+  ob_imbalance:"OB imbalance (top20)",imbalance_top5:"OB imbalance (top5)",
+  microprice_dev_bps:"Microprice dev (bps)",depth_imbalance_1pct:"Depth imbalance ±1%",
+  bid_vol20:"Bid vol (top20)",ask_vol20:"Ask vol (top20)",depth_bid_1pct:"Bid depth ±1%",
+  depth_ask_1pct:"Ask depth ±1%",taker_buy_ratio:"Taker buy ratio",trade_count:"Trade count",
+  avg_trade_size:"Avg trade size",quote_volume_24h:"24h quote volume",pct_change_24h:"24h % change",
+  cb_premium:"Coinbase premium",funding_rate:"Funding rate",open_interest:"Open interest"};
+const mlabel=(f)=>METRIC_LABEL[f]||f;
+let anChart=null, AN={};
+function ensureAnChart(){
+  if(anChart) return anChart;
+  anChart=new Chart($("an-chart"),{type:"line",data:{labels:[],datasets:[{data:[],
+    borderColor:"#22d3ee",backgroundColor:"rgba(34,211,238,.12)",fill:true,tension:.15,
+    pointRadius:0,borderWidth:2}]},
+    options:{responsive:true,maintainAspectRatio:false,animation:false,plugins:{legend:{display:false}},
+    scales:{x:{ticks:{color:"#8a97a8",maxTicksLimit:8},grid:{display:false}},
+            y:{ticks:{color:"#8a97a8"},grid:{color:"#1b2230"}}}}});
+  return anChart;
+}
+async function loadAnalysisSymbols(){
+  try{const o=await fetch("/api/observations").then(r=>r.json());
+    const syms=Object.keys(o.counts||{}).sort();
+    const cur=$("an-symbol").value;
+    $("an-symbol").innerHTML = syms.length
+      ? syms.map(s=>`<option value="${s}">${s} (${o.counts[s]})</option>`).join("")
+      : `<option value="">— no recorded data yet —</option>`;
+    if(syms.includes(cur)) $("an-symbol").value=cur;
+    if($("an-symbol").value) loadAnalysis();
+  }catch(e){}
+}
+async function loadAnalysis(){
+  const sym=$("an-symbol").value; if(!sym) return;
+  try{
+    AN=await fetch(`/api/observations/series?symbol=${encodeURIComponent(sym)}`).then(r=>r.json());
+    const keep=$("an-metric").value;
+    const fields=AN.fields||[];
+    $("an-metric").innerHTML=fields.map(f=>`<option value="${f}">${mlabel(f)}</option>`).join("");
+    if(fields.includes(keep)) $("an-metric").value=keep;
+    else if(fields.includes("mid_price")) $("an-metric").value="mid_price";
+    drawAnalysis();
+    $("an-meta").textContent=`${AN.n} observations · ${AN.series.length?("from "+AN.series[0].timestamp.replace("T"," ").slice(0,16)+" to "+AN.series[AN.series.length-1].timestamp.replace("T"," ").slice(0,16)):""}`;
+    const st=AN.stats||{};
+    $("an-stats").innerHTML = (AN.fields||[]).length ? (AN.fields).map(f=>{
+      const s=st[f]||{}; const d=(f.includes("price")||f.includes("vol")||f==="open_interest")?2:5;
+      return `<tr><td>${mlabel(f)}</td><td>${fmt(s.last,d)}</td><td>${fmt(s.mean,d)}</td>
+        <td>${fmt(s.min,d)}</td><td>${fmt(s.max,d)}</td><td>${fmt(s.std,d)}</td><td>${s.n||0}</td></tr>`;
+    }).join("") : `<tr><td colspan="7" class="flat">No recorded data for ${sym} yet.</td></tr>`;
+  }catch(e){ $("an-stats").innerHTML=`<tr><td colspan="7" class="flat">Could not load series.</td></tr>`; }
+}
+function drawAnalysis(){
+  const f=$("an-metric").value, ser=AN.series||[];
+  const c=ensureAnChart();
+  c.data.labels=ser.map(o=>(o.timestamp||"").replace("T"," ").slice(5,16));
+  c.data.datasets[0].data=ser.map(o=>o[f]!=null?o[f]:null);
+  c.data.datasets[0].label=mlabel(f);
+  c.update("none");
+}
+$("an-symbol").onchange=loadAnalysis;
+$("an-metric").onchange=drawAnalysis;
+$("an-reload").onclick=loadAnalysis;
 function renderExperiments(){
   const kindf=$("x-kind").value, q=$("x-search").value.trim().toUpperCase();
   let rows=XROWS.filter(r=>(!kindf||r.kind===kindf)&&(!q||(r.symbol||"").toUpperCase().includes(q)));

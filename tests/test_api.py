@@ -97,6 +97,32 @@ def test_experiments_log_and_endpoint(tmp_path, monkeypatch) -> None:
         assert isinstance(served, list) and served[0]["kind"] == "train"
 
 
+def test_observation_series_endpoint(tmp_path) -> None:
+    """/api/observations/series returns the ASC time series + per-metric summary stats."""
+    import asyncio
+    from datetime import datetime, timezone
+
+    from cryptotrader.persistence import TradeStore
+
+    settings = Settings()
+    settings.persistence.db_path = tmp_path / "obs.sqlite"
+
+    async def seed() -> None:
+        async with TradeStore(settings.persistence.db_path) as st:
+            for i in range(3):
+                await st.record_observation(
+                    datetime.now(tz=timezone.utc), "BTC/USDT",
+                    mid_price=100.0 + i, ob_imbalance=0.1 * i, microprice_dev_bps=float(i))
+
+    asyncio.run(seed())
+    with TestClient(create_app(settings)) as client:
+        d = client.get("/api/observations/series?symbol=BTC/USDT").json()
+        assert d["n"] == 3
+        assert "mid_price" in d["fields"] and "microprice_dev_bps" in d["fields"]
+        assert d["series"][0]["mid_price"] == 100.0          # ascending by time
+        assert d["stats"]["mid_price"]["max"] == 102.0 and d["stats"]["mid_price"]["n"] == 3
+
+
 def test_clear_runs_endpoint(tmp_path) -> None:
     """/api/runs/clear wipes the selected environment (no keys reload to keep the db_path)."""
     settings = Settings()
