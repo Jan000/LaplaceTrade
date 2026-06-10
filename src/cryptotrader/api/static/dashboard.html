@@ -140,8 +140,9 @@
           <th data-k="model_timeframe">Model</th><th data-k="trained_at">Trained</th>
           <th data-k="n_trades">Trades</th><th data-k="win_rate">Win%</th><th data-k="profit_factor">PF</th>
           <th data-k="avg_efficiency">Eff</th><th data-k="net_pnl">Net PnL</th>
-          <th data-k="_wf">Walk-fwd</th><th data-k="_ho">Holdout</th><th>Actions</th></tr></thead>
-        <tbody id="sym-rows"><tr><td colspan="13" class="flat">Loading…</td></tr></tbody>
+          <th data-k="_wf">Walk-fwd</th><th data-k="_ho">Holdout</th>
+          <th data-k="_ho_sharpe" title="Holdout risk: Sharpe · profit factor · max drawdown (+ expectancy in tooltip)">Risk (HO)</th><th>Actions</th></tr></thead>
+        <tbody id="sym-rows"><tr><td colspan="14" class="flat">Loading…</td></tr></tbody>
       </table>
     </div>
     <div class="sym" style="margin-top:8px;font-size:11.5px">
@@ -978,9 +979,20 @@ async function loadSymbols(){
     const rows=(d.symbols||[]).slice();
     for(const a of SYMBOL_ADDED){if(!rows.some(r=>r.symbol===a))
       rows.push({symbol:a,trade:TRADE_SET.includes(a),has_model:false,n_trades:0,win_rate:0,net_pnl:0,profit_factor:0,avg_efficiency:null});}
-    rows.forEach(r=>{r._wf=valRet(r.walkforward); r._ho=valRet(r.holdout);});
+    rows.forEach(r=>{r._wf=valRet(r.walkforward); r._ho=valRet(r.holdout);
+      r._ho_sharpe=(r.holdout&&r.holdout.sharpe!=null)?r.holdout.sharpe:null;});
     SYM_ROWS=rows; renderSymbols();
-  }catch(e){$("sym-rows").innerHTML=`<tr><td colspan="13" class="flat">Could not load symbols.</td></tr>`;}
+  }catch(e){$("sym-rows").innerHTML=`<tr><td colspan="14" class="flat">Could not load symbols.</td></tr>`;}
+}
+/* Compact holdout risk profile: Sharpe · profit factor · max drawdown (expectancy in tooltip). */
+function riskcell(ho){
+  if(!ho || ho.sharpe==null) return `<span class="reason">—</span>`;
+  const sh=ho.sharpe, pf=ho.profit_factor, dd=ho.max_drawdown_pct, ex=ho.expectancy_pct;
+  const good=(sh>=1)&&(pf==null||pf>=1.3)&&(dd==null||dd<10);
+  const col=good?'var(--green)':(sh>0?'var(--amber)':'var(--red)');
+  const tip=`Sharpe ${sh} · PF ${pf??'∞'} · MaxDD ${dd??'—'}% · Expectancy ${ex??'—'}%/trade`
+    +` · win ${ho.win_rate!=null?(ho.win_rate*100).toFixed(0):'—'}% · ${ho.n_trades??0} trades`;
+  return `<span style="color:${col}" title="${tip}">Sh ${fmt(sh,2)} · PF ${pf!=null?fmt(pf,2):'∞'} · DD ${dd!=null?fmt(dd,1):'—'}%</span>`;
 }
 function renderSymbols(){
   const k=symSort.k,dir=symSort.dir;
@@ -1002,13 +1014,14 @@ function renderSymbols(){
       <td>${r.n_trades}</td><td>${fmt((r.win_rate||0)*100,1)}%</td><td>${pfv}</td><td>${eff}</td>
       <td class="${sign(r.net_pnl)}">$${fmt(r.net_pnl,2)}</td>
       <td>${valdot(r.walkforward)}</td><td>${valdot(r.holdout)}</td>
+      <td style="white-space:nowrap;font-size:11.5px">${riskcell(r.holdout)}</td>
       <td style="white-space:nowrap">
         <button class="primary btn-xs" data-act="pipeline" data-sym="${r.symbol}" title="Train + walk-forward + holdout">T+T</button>
         <button class="ghost btn-xs" data-act="train" data-sym="${r.symbol}">Train</button>
         <button class="ghost btn-xs" data-act="walkforward" data-sym="${r.symbol}">WF</button>
         <button class="ghost btn-xs" data-act="holdout" data-sym="${r.symbol}">HO</button>
       </td></tr>`;
-  }).join("") : `<tr><td colspan="13" class="flat">No symbols.</td></tr>`;
+  }).join("") : `<tr><td colspan="14" class="flat">No symbols.</td></tr>`;
   $("sym-rows").querySelectorAll("button[data-act]").forEach(b=>
     b.onclick=()=>symAction(b.dataset.act,b.dataset.sym));
   $("sym-rows").querySelectorAll("input[data-trade]").forEach(c=>

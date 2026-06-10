@@ -104,6 +104,7 @@ def main() -> None:
         print(f"{s:<12}{role:<14}{len(test):>7}{rep['total_return_pct']:>10.1f}{pf_s:>7}"
               f"{rep['n_trades']:>8}{rep['win_rate'] * 100:>6.1f}{rep['max_drawdown_pct']:>8.1f}")
         if s == primary:  # persist the (out-of-time) result for the dashboard + experiment log
+            init_eq = rep.get("initial_equity") or settings.risk.account_equity
             result = {
                 "timeframe": settings.exchange.timeframe,
                 "return_pct": round(rep["total_return_pct"], 2),
@@ -111,6 +112,10 @@ def main() -> None:
                 "win_rate": round(rep["win_rate"], 4),
                 "n_trades": rep["n_trades"],
                 "max_drawdown_pct": round(rep["max_drawdown_pct"], 2),
+                "sharpe": round(rep.get("sharpe_ratio", 0.0), 3),
+                # expectancy as % of starting equity per trade (avg_trade_pnl normalised)
+                "expectancy_pct": round(rep.get("avg_trade_pnl", 0.0) / init_eq * 100, 4)
+                                  if init_eq else None,
             }
             try:
                 from cryptotrader.ml.registry import write_validation
