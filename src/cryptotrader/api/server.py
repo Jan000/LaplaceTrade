@@ -35,7 +35,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.controller = controller
     app.state.settings = settings
     from cryptotrader.api.recorder_control import RecorderController
+    from cryptotrader.ops.logbuffer import install_log_capture
 
+    install_log_capture()                 # capture logs for the dashboard log viewer
     recorder = RecorderController(settings)
     app.state.recorder = recorder
     register_management_routes(app, controller)  # /api/config + /api/train
@@ -253,6 +255,22 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def resume() -> JSONResponse:
         """Clear a halt (manual or circuit-breaker) so trading can resume."""
         return JSONResponse(controller.resume())
+
+    @app.get("/api/logs")
+    async def logs(limit: int = 300) -> JSONResponse:
+        """Recent log lines (errors / halts / order activity) for in-dashboard diagnosis."""
+        from cryptotrader.ops.logbuffer import recent_logs
+
+        return JSONResponse({"lines": recent_logs(limit)})
+
+    @app.post("/api/notify/test")
+    async def notify_test() -> JSONResponse:
+        """Send a test alert to the configured channels (verify webhook/Telegram works)."""
+        from cryptotrader.ops.notify import notify
+
+        sent = await notify(app.state.settings,
+                            "✅ Test alert from the CryptoTrader dashboard.", level="critical")
+        return JSONResponse({"sent": sent})
 
     @app.get("/api/health")
     async def health() -> JSONResponse:

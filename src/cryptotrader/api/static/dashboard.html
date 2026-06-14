@@ -247,6 +247,20 @@
     <pre id="x-detail" class="joblog hidden" style="margin-top:8px"></pre>
   </div>
 
+  <!-- Ops: live logs + alert test -->
+  <div class="card wide">
+    <div class="row" style="flex-wrap:wrap">
+      <h2 style="margin:0">Ops &amp; logs</h2>
+      <span class="sym">— recent engine log + alert check (for unattended 24/7)</span>
+      <div class="spacer"></div>
+      <span id="ops-health" class="sym"></span>
+      <button id="ops-testalert" class="ghost">Send test alert</button>
+      <button id="ops-logs" class="ghost">Refresh log</button>
+      <label class="sym"><input type="checkbox" id="ops-autolog"> auto</label>
+    </div>
+    <pre id="ops-logout" class="joblog" style="margin-top:8px;max-height:320px">Press “Refresh log”.</pre>
+  </div>
+
   <!-- Per-symbol analysis of the recorded live data -->
   <div class="card wide">
     <div class="row" style="flex-wrap:wrap">
@@ -1094,7 +1108,28 @@ async function loadExperiments(){
   catch(e){ $("x-rows").innerHTML=`<tr><td colspan="10" class="flat">Could not load experiments.</td></tr>`; }
   refreshRecorder();
   loadAnalysisSymbols();
+  loadOps();
 }
+/* ---------- ops: logs + alert test + health ---------- */
+let opsTimer=null;
+async function loadOps(){
+  try{const h=await fetch("/api/health").then(r=>r.json());
+    $("ops-health").textContent=`engine: ${h.engine}${h.halted?" · HALTED":""} · recorder: ${h.recorder_running?"on":"off"}`;
+  }catch(e){}
+  try{const d=await fetch("/api/logs?limit=300").then(r=>r.json());
+    const el=$("ops-logout"); const atBottom=el.scrollTop+el.clientHeight>=el.scrollHeight-24;
+    el.textContent=(d.lines||[]).join("\n")||"(no log yet)";
+    if(atBottom) el.scrollTop=el.scrollHeight;
+  }catch(e){ $("ops-logout").textContent="(log unavailable)"; }
+}
+$("ops-logs").onclick=loadOps;
+$("ops-testalert").onclick=async()=>{
+  const r=await fetch("/api/notify/test",{method:"POST"}); const d=await r.json();
+  alert(d.sent ? "Test alert sent to your configured channel(s)."
+              : "Not sent — configure notify.webhook_url or Telegram (Settings → Alerts / secrets.yaml).");
+};
+$("ops-autolog").onchange=()=>{ clearInterval(opsTimer);
+  opsTimer = $("ops-autolog").checked ? setInterval(loadOps,5000) : null; };
 /* ---------- live recorder control ---------- */
 let recTimer=null;
 async function refreshRecorder(){
