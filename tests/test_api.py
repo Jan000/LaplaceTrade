@@ -184,6 +184,28 @@ def test_circuit_breaker_detects_limits() -> None:
     assert c._risk_breach() is None
 
 
+def test_positions_from_account_adopts_only_real_positions() -> None:
+    from cryptotrader.api.controller import EngineController
+    from cryptotrader.core.types import Side
+
+    acct = {"positions": [
+        {"symbol": "BTC/USDT", "side": "long", "contracts": 0.01, "entryPrice": 60000.0},
+        {"symbol": "ETH/USDT", "side": "short", "contracts": 0, "entryPrice": 3000.0},  # zero -> skip
+        {"symbol": "SOL/USDT", "side": "long", "contracts": 2, "entryPrice": None},     # no entry -> skip
+    ]}
+    m = EngineController._positions_from_account(acct)
+    assert set(m) == {"BTC/USDT"}
+    assert m["BTC/USDT"]["side"] is Side.LONG and m["BTC/USDT"]["quantity"] == 0.01
+    assert m["BTC/USDT"]["entry_price"] == 60000.0
+
+
+def test_account_endpoint_requires_keys(tmp_path) -> None:
+    settings = Settings()  # no API keys
+    settings.persistence.db_path = tmp_path / "a.sqlite"
+    with TestClient(create_app(settings)) as client:
+        assert client.post("/api/account").status_code == 400
+
+
 async def test_flatten_all_and_resume(monkeypatch) -> None:
     from cryptotrader.api.controller import EngineController
 

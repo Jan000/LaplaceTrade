@@ -34,6 +34,19 @@ class FakeClient:
     async def cancel_order(self, oid, symbol):
         self.cancelled.append((oid, symbol))
 
+    has = {"fetchPositions": True}
+
+    async def fetch_balance(self):
+        return {"total": {"USDT": 1234.5, "BTC": 0.01}, "free": {"USDT": 1200.0}}
+
+    async def fetch_positions(self, symbols):
+        return [{"symbol": "BTC/USDT", "side": "long", "contracts": 0.01,
+                 "entryPrice": 60000.0, "notional": 600.0, "unrealizedPnl": 5.0}]
+
+    async def fetch_open_orders(self, symbol):
+        return [{"symbol": symbol, "side": "sell", "type": "limit",
+                 "amount": 0.01, "price": 65000.0, "id": "x1"}]
+
 
 def _handler() -> tuple[CCXTExecutionHandler, FakeClient]:
     h = CCXTExecutionHandler(
@@ -114,3 +127,12 @@ async def test_create_with_retry(monkeypatch) -> None:
 
     r = await h._create_with_retry(Flaky(), "BTC/USDT", "market", "buy", 1.0)
     assert r["id"] == "ok" and calls["n"] == 3
+
+
+@pytest.mark.asyncio
+async def test_fetch_account() -> None:
+    h, _ = _handler()
+    acct = await h.fetch_account(["BTC/USDT"])
+    assert acct["balances"]["USDT"] == 1234.5
+    assert acct["positions"][0]["symbol"] == "BTC/USDT" and acct["positions"][0]["entryPrice"] == 60000.0
+    assert acct["open_orders"][0]["id"] == "x1"

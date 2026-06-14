@@ -100,8 +100,9 @@ class EngineController:
             # Real money: size from the ACTUAL exchange balance (and surface pre-existing
             # open orders), not the configured number — best-effort, timeout-guarded.
             account_equity = float(self.settings.risk.account_equity)
+            adopt: dict = {}
             if mode == "live" and real_orders:
-                account_equity = await self._reconcile_real(symbols, account_equity)
+                account_equity, adopt = await self._reconcile_real(symbols, account_equity)
 
             equity_each = account_equity / max(1, len(symbols))
             environment = ("live" if real_orders else "paper") if mode == "live" else "simulation"
@@ -118,14 +119,15 @@ class EngineController:
             self._breaker_active = False
 
             for sym in symbols:
-                await self._start_one(sym, mode, real_orders, equity_each, environment, sim_days)
+                await self._start_one(sym, mode, real_orders, equity_each, environment,
+                                      sim_days, adopt.get(sym))
 
             logger.info("Started %d engine(s) in %s mode: %s",
                         len(self._engines), mode, ", ".join(symbols))
             self._publish_aggregate()
 
     async def _start_one(self, symbol, mode, real_orders, equity_each, environment,
-                         sim_days=None) -> None:
+                         sim_days=None, initial_position=None) -> None:
         sub = self.settings.model_copy(deep=True)
         sub.exchange.symbol = symbol
         sub.risk.account_equity = equity_each
@@ -171,6 +173,7 @@ class EngineController:
             data_handler=data_handler, feature_engine=feature_engine, strategy=strategy,
             risk_manager=risk, execution_handler=execution, settings=sub, state=state,
             store=store, warmup_bars=warmup_bars, on_update=self._on_engine_update,
+            initial_position=initial_position,
         )
         self._engines.append(engine)
         self._tasks.append(asyncio.create_task(self._run_guarded(engine)))
@@ -342,30 +345,58 @@ class EngineController:
     # ------------------------------------------------------------------ #
     # Builders / helpers (per-symbol settings)
     # ------------------------------------------------------------------ #
-    async def _reconcile_real(self, symbols: list[str], fallback: float) -> float:
-        """On real-money start: read the actual exchange balance, warn on pre-existing open
-        orders, alert. Best-effort + timeout-guarded; falls back to the configured equity."""
+    @staticmethod
+    def _positions_from_account(acct: dict) -> dict:
+        """Map an exchange account snapshot's derivative positions -> adopt dict per symbol.
+
+        Only positions with a reported size AND entry price are adopted (futures/margin —
+        unambiguously the bot's trading position). Spot base-asset balances are deliberately
+        NOT adopted (can't tell them apart from the user's own holdings -> never auto-sell)."""
+        out: dict = {}
+        from cryptotrader.core.types import Side
+
+        for p in acct.get("positions", []):
+            sym, contracts, entry = p.get("symbol"), p.get("contracts"), p.get("entryPrice")
+            if sym and contracts and entry:
+                side = Side.LONG if str(p.get("side", "long")).lower() == "long" else Side.SHORT
+                out[sym] = {"side": side, "quantity": abs(float(contracts)),
+                            "entry_price": float(entry)}
+        return out
+
+    async def _reconcile_real(self, symbols: list[str], fallback: float) -> tuple[float, dict]:
+        """On real-money start: read the actual exchange balance & positions, adopt existing
+        derivative positions, warn on pre-existing open orders, alert. Best-effort +
+        timeout-guarded; returns (equity, adopt_map) and falls back to the configured equity."""
         from cryptotrader.execution.live import CCXTExecutionHandler
 
         quote = symbols[0].split("/")[1] if "/" in symbols[0] else "USDT"
         rec = CCXTExecutionHandler(self.settings.exchange, self.settings.execution)
-        eq = fallback
+        eq, adopt = fallback, {}
         try:
-            bal = await asyncio.wait_for(rec.fetch_equity(quote), timeout=20.0)
+            acct = await asyncio.wait_for(rec.fetch_account(symbols), timeout=25.0)
+            bal = (acct.get("balances") or {}).get(quote)
             if bal and bal > 0:
                 eq = float(bal)
                 logger.warning("Real-money: account equity from exchange = %.2f %s", eq, quote)
             else:
                 logger.warning("Could not read exchange balance; using configured %.2f", fallback)
-            warns = await asyncio.wait_for(rec.open_orders_warning(symbols), timeout=20.0)
+            adopt = self._positions_from_account(acct)
+            for sym, p in adopt.items():
+                logger.warning("Adopting existing %s position: %s %.8f @ %.2f",
+                               sym, p["side"].name, p["quantity"], p["entry_price"])
+            warns = [f"{o.get('symbol')} {o.get('side')} {o.get('type')} {o.get('amount')}"
+                     for o in acct.get("open_orders", [])]
             for w in warns:
-                logger.warning("Reconcile: %s", w)
+                logger.warning("Pre-existing open order: %s", w)
             try:
                 from cryptotrader.ops.notify import notify
 
-                msg = f"🟢 LIVE trading started ({', '.join(symbols)}) — equity {eq:.2f} {quote}"
+                msg = (f"🟢 LIVE trading started ({', '.join(symbols)}) — equity {eq:.2f} {quote}"
+                       f"{' (TESTNET)' if acct.get('testnet') else ''}")
+                if adopt:
+                    msg += f" | adopted {len(adopt)} position(s)"
                 if warns:
-                    msg += " | ⚠ " + "; ".join(warns)
+                    msg += f" | ⚠ {len(warns)} pre-existing order(s)"
                 await notify(self.settings, msg, level="warning")
             except Exception:  # pragma: no cover
                 pass
@@ -373,7 +404,7 @@ class EngineController:
             logger.warning("Real-money reconciliation failed; using configured equity.", exc_info=True)
         finally:
             await rec.close()
-        return eq
+        return eq, adopt
 
     def _build_execution(self, settings: Settings, real_orders: bool):
         if real_orders:

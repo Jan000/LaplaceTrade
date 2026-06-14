@@ -64,6 +64,12 @@ class CCXTExecutionHandler:
                     "enableRateLimit": True,
                 }
             )
+            if getattr(self.exchange_cfg, "testnet", False):
+                try:
+                    self._client.set_sandbox_mode(True)  # route to the exchange testnet
+                    logger.warning("[LIVE] sandbox/testnet mode ENABLED for %s", self.exchange_cfg.id)
+                except Exception:
+                    logger.warning("testnet not supported by %s; using live endpoints", self.exchange_cfg.id)
         return self._client
 
     async def close(self) -> None:
@@ -83,6 +89,38 @@ class CCXTExecutionHandler:
         except Exception:
             logger.warning("Could not fetch exchange balance for %s", quote, exc_info=True)
             return None
+
+    async def fetch_account(self, symbols: list[str]) -> dict:
+        """Read-only account snapshot for the dashboard's 'test connection' / reconcile:
+        non-zero balances, open derivative positions, and open orders. Best-effort."""
+        client = self._ensure_client()
+        out: dict = {"testnet": bool(getattr(self.exchange_cfg, "testnet", False)),
+                     "exchange": self.exchange_cfg.id, "balances": {},
+                     "positions": [], "open_orders": []}
+        try:
+            bal = await client.fetch_balance()
+            out["balances"] = {k: round(float(v), 8) for k, v in (bal.get("total") or {}).items() if v}
+        except Exception as exc:
+            out["balance_error"] = str(exc)[:160]
+        try:
+            if getattr(client, "has", {}).get("fetchPositions"):
+                for p in await client.fetch_positions(symbols):
+                    if p.get("contracts"):
+                        out["positions"].append({
+                            "symbol": p.get("symbol"), "side": p.get("side"),
+                            "contracts": p.get("contracts"), "entryPrice": p.get("entryPrice"),
+                            "notional": p.get("notional"), "unrealizedPnl": p.get("unrealizedPnl")})
+        except Exception:
+            pass
+        try:
+            for s in symbols:
+                for o in await client.fetch_open_orders(s):
+                    out["open_orders"].append({
+                        "symbol": o.get("symbol"), "side": o.get("side"), "type": o.get("type"),
+                        "amount": o.get("amount"), "price": o.get("price"), "id": o.get("id")})
+        except Exception:
+            pass
+        return out
 
     async def open_orders_warning(self, symbols: list[str]) -> list[str]:
         """List pre-existing open orders per symbol so the operator is aware on start."""

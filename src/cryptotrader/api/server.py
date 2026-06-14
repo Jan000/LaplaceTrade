@@ -266,6 +266,27 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "symbols": [s["symbol"] for s in snap.get("symbols", [])],
         })
 
+    @app.post("/api/account")
+    async def account() -> JSONResponse:
+        """Read-only exchange account snapshot (balances / positions / open orders) for the
+        configured keys — the dashboard 'test connection & reconcile' action. Honors testnet."""
+        import asyncio as _aio
+
+        s = app.state.settings
+        if not (s.exchange.api_key and s.exchange.api_secret):
+            return JSONResponse({"error": "No API keys saved (Settings → Exchange API keys)."},
+                                status_code=400)
+        from cryptotrader.execution.live import CCXTExecutionHandler
+
+        h = CCXTExecutionHandler(s.exchange, s.execution)
+        try:
+            data = await _aio.wait_for(h.fetch_account(controller.trade_symbols()), timeout=25.0)
+            return JSONResponse({"status": "ok", **data})
+        except Exception as exc:
+            return JSONResponse({"error": str(exc)[:200]}, status_code=400)
+        finally:
+            await h.close()
+
     @app.get("/api/trades")
     async def trades(
         limit: int = 200, run_id: str | None = None, env: str | None = None

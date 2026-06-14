@@ -67,7 +67,11 @@ class LiveTradingEngine:
         store: TradeStore | None = None,
         warmup_bars: list[Bar] | None = None,
         on_update=None,
+        initial_position: dict | None = None,
     ) -> None:
+        # An existing exchange position to ADOPT on start (reconciliation): {side, quantity,
+        # entry_price}. Only set for real-money starts with a reported derivative position.
+        self._initial_position = initial_position
         # When set, called on every state change instead of the broadcaster — lets a
         # controller aggregate several concurrent engines into one dashboard snapshot.
         self._on_update = on_update
@@ -103,6 +107,8 @@ class LiveTradingEngine:
         await self._init_state()
         self._state.status = "running"
         self._prime()
+        if self._initial_position:
+            await self._adopt_position(self._initial_position)
         self._publish()  # show price/equity immediately, before the first live candle
         try:
             # Act on the most recent CLOSED candle right away (the current signal),
@@ -141,6 +147,34 @@ class LiveTradingEngine:
     @property
     def halted(self) -> bool:
         return self._halted
+
+    async def _adopt_position(self, p: dict) -> None:
+        """Seed the portfolio with a pre-existing exchange position (reconciliation), so the
+        engine manages its exits, and (re)place native protective orders for it."""
+        from datetime import datetime, timezone
+
+        from cryptotrader.core.events import FillEvent
+
+        side = p["side"] if isinstance(p["side"], Side) else (
+            Side.LONG if str(p["side"]).lower() == "long" else Side.SHORT)
+        qty = abs(float(p["quantity"]))
+        entry = float(p["entry_price"])
+        atr = self._latest_atr or self._current_atr() or (entry * 0.01)
+        stop_dist = self._settings.barriers.sl_mult * atr
+        tp_dist = self._settings.barriers.tp_mult * atr
+        fill = FillEvent(symbol=self._symbol, timestamp=datetime.now(tz=timezone.utc),
+                         side=side, quantity=qty, fill_price=entry, fee=0.0,
+                         slippage=0.0, is_exit=False)
+        self._portfolio.open_position(fill, stop_dist, tp_dist, self._settings.barriers.horizon)
+        logger.warning("Adopted existing %s position: %s %.8f @ %.2f (reconciled)",
+                       self._symbol, side.name, qty, entry)
+        pos = self._portfolio.position
+        if pos is not None and hasattr(self._exec, "place_protective"):
+            try:
+                await self._exec.place_protective(
+                    self._symbol, pos.side, pos.quantity, pos.stop_loss, pos.take_profit)
+            except Exception:  # pragma: no cover
+                logger.exception("Could not place protective orders for adopted %s", self._symbol)
 
     async def flatten(self, reason: str = "kill_switch") -> None:
         """Immediately close any open position at the last price and halt new entries.

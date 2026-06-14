@@ -43,6 +43,7 @@ class ExchangeConfig(BaseModel):
     timeframe: str = "15m"
     api_key: str | None = None
     api_secret: str | None = None
+    testnet: bool = False           # route REAL orders / account calls to the exchange sandbox
 
 
 class DataConfig(BaseModel):
