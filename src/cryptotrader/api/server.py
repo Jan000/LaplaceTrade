@@ -47,6 +47,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     scheduler = Scheduler(settings, app.state.jobs, controller)
     app.state.scheduler = scheduler
 
+    # Optional HTTP Basic-auth (enabled when dashboard.auth_password is set). Reads
+    # app.state.settings each request so a config reload takes effect without a restart.
+    from cryptotrader.api.auth import BasicAuthMiddleware
+
+    app.add_middleware(
+        BasicAuthMiddleware,
+        get_auth=lambda: (app.state.settings.dashboard.auth_user,
+                          app.state.settings.dashboard.auth_password),
+    )
+
     _COMMON_SYMBOLS_AUTOSTART = ["BTC/USDT", "ETH/USDT", "SOL/USDT", "BNB/USDT",
                                  "XRP/USDT", "ADA/USDT", "DOGE/USDT", "LTC/USDT"]
 

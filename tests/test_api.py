@@ -230,11 +230,34 @@ def test_config_redacts_secrets() -> None:
     from cryptotrader.api.management import _redact
 
     cfg = {"exchange": {"api_key": "k", "api_secret": "s"},
-           "notify": {"telegram_bot_token": "tok", "webhook_url": "https://hook"}}
+           "notify": {"telegram_bot_token": "tok", "webhook_url": "https://hook"},
+           "dashboard": {"auth_user": "admin", "auth_password": "pw"}}
     r = _redact(cfg)
     assert r["exchange"]["api_key"] is None and r["exchange"]["api_secret"] is None
     assert r["notify"]["telegram_bot_token"] is None      # secret hidden
     assert r["notify"]["webhook_url"] == "https://hook"   # non-secret kept
+    assert r["dashboard"]["auth_password"] is None and r["dashboard"]["auth_user"] == "admin"
+
+
+def test_dashboard_basic_auth(tmp_path) -> None:
+    """When a password is set, every endpoint needs Basic-auth except /api/health."""
+    settings = Settings()
+    settings.persistence.db_path = tmp_path / "auth.sqlite"
+    settings.dashboard.auth_user = "admin"
+    settings.dashboard.auth_password = "s3cret"
+    with TestClient(create_app(settings)) as client:
+        assert client.get("/api/state").status_code == 401            # no creds
+        assert client.get("/api/health").status_code == 200           # exempt
+        assert client.get("/api/state", auth=("admin", "wrong")).status_code == 401
+        assert client.get("/api/state", auth=("admin", "s3cret")).status_code == 200
+        assert client.get("/", auth=("admin", "s3cret")).status_code == 200
+
+
+def test_no_auth_by_default(tmp_path) -> None:
+    settings = Settings()
+    settings.persistence.db_path = tmp_path / "na.sqlite"
+    with TestClient(create_app(settings)) as client:
+        assert client.get("/api/state").status_code == 200           # auth off -> open
 
 
 async def test_scheduler_retrain_launches_jobs(tmp_path, monkeypatch) -> None:

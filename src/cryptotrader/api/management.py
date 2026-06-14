@@ -49,6 +49,9 @@ def _redact(cfg: dict) -> dict:
     nt = cfg.get("notify")
     if isinstance(nt, dict) and nt.get("telegram_bot_token"):
         nt["telegram_bot_token"] = None      # never echo the bot token
+    db = cfg.get("dashboard")
+    if isinstance(db, dict) and db.get("auth_password"):
+        db["auth_password"] = None           # never echo the dashboard password
     return cfg
 
 

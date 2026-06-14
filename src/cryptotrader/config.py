@@ -284,6 +284,17 @@ class NotificationConfig(BaseModel):
     min_level: str = "warning"             # info | warning | critical
 
 
+class DashboardConfig(BaseModel):
+    """Optional HTTP Basic-auth for the dashboard/API (for safe remote exposure).
+
+    Auth is OFF unless ``auth_password`` is set. Put the password in the git-ignored
+    config/secrets.yaml, not config.yaml. ``/api/health`` stays open for uptime probes.
+    """
+
+    auth_user: str = "admin"
+    auth_password: str | None = None
+
+
 class PersistenceConfig(BaseModel):
     db_path: Path = Path("data/cryptotrader.sqlite")
 
@@ -309,6 +320,7 @@ class Settings(BaseSettings):
     barriers: BarrierConfig = Field(default_factory=BarrierConfig)
     persistence: PersistenceConfig = Field(default_factory=PersistenceConfig)
     notify: NotificationConfig = Field(default_factory=NotificationConfig)
+    dashboard: DashboardConfig = Field(default_factory=DashboardConfig)
 
     # Source priority (first = highest): init kwargs > environment > YAML > defaults.
     # This is what makes CT_* env vars actually override config.yaml.

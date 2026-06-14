@@ -199,6 +199,11 @@ Docker `HEALTHCHECK`).
   `telegram_chat_id` (token in `config/secrets.yaml`) to get halt/error alerts while away.
 * **Recorder autostart** — `data.recorder_autostart: true` keeps the microstructure recorder
   collecting across restarts.
+* **Dashboard login** — set `dashboard.auth_password` (in `config/secrets.yaml`) to require
+  HTTP Basic-auth on the whole dashboard/API/WebSocket before exposing it remotely
+  (`/api/health` stays open for probes). Still use TLS/a reverse proxy for the transport.
+* **Auto-retrain** — `data.retrain_interval_days` re-trains + walk-forwards the traded
+  symbols on a cadence (or **Retrain now** in the Ops panel); restart the engine to deploy.
 
 On a real-money start the engine sizes from the **actual exchange balance** (not the
 configured number) and warns about any pre-existing open orders.
@@ -208,15 +213,17 @@ configured number) and warns about any pre-existing open orders.
 **In place:** per-symbol guardrail (no trading a coin with another's model) · native
 stop/TP safety net · circuit breakers + kill-switch · order precision / min-notional checks
 + transient-error retries · engine survives bad orders (skip entry / retry exit) · balance
-reconciliation + open-order warning on start · alerts · health check · auto-restart via
-Docker/systemd · persistence + experiment/observation logging.
+reconciliation + **position adoption** on start · open-order warning · testnet + a
+"test connection" account check · scheduled auto-retrain · alerts (incl. trade & daily) ·
+**Basic-auth login** · in-dashboard log viewer · health check · auto-restart via Docker/
+systemd · persistence + experiment/observation logging.
 
-**Still recommended before scaling capital (honest gaps):** full **position
-reconciliation** on restart (if a native stop fills while down, the bot restarts flat and
-won't have that trade record — protected, not reconciled) · **live-tested** order handling
-against the real exchange (the order path is unit-tested with a fake client, not yet against
-production) · authenticated/TLS dashboard for remote access · encrypted secrets at rest ·
-multi-account / larger-size slippage modelling. Treat the strategy itself as a **thin,
+**Still recommended before scaling capital (honest gaps):** **live-test** the order path
+against the exchange (unit-tested with a fake client + a testnet "test connection" button —
+do a small testnet run before mainnet) · **TLS** in front of the dashboard (auth is built
+in; terminate TLS at a reverse proxy) · encrypted secrets at rest · engine hot-reload of a
+freshly retrained model (currently needs a restart, which is alerted) · multi-account /
+larger-size slippage modelling. Treat the strategy itself as a **thin,
 window-sensitive edge** (Sharpe ~0.9, PF ~1.2 on BTC holdout) — start tiny, watch the
 forward/paper results, and scale only if the live edge holds.
 
