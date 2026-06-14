@@ -237,6 +237,32 @@ def test_config_redacts_secrets() -> None:
     assert r["notify"]["webhook_url"] == "https://hook"   # non-secret kept
 
 
+async def test_scheduler_retrain_launches_jobs(tmp_path, monkeypatch) -> None:
+    import cryptotrader.ml.registry as registry
+    from cryptotrader.api.scheduler import Scheduler
+
+    monkeypatch.setattr(registry, "MODELS_DIR", tmp_path / "models")
+    started: list = []
+
+    class FakeJobs:
+        any_running = False
+
+        async def start(self, kind, symbol=None, *a):
+            started.append((kind, symbol))
+            return f"{kind}:{symbol}", "started"
+
+    class FakeCtrl:
+        def snapshot(self):
+            return {"status": "idle"}
+
+    s = Settings()
+    s.data.trade_symbols = ["BTC/USDT"]
+    sch = Scheduler(s, FakeJobs(), FakeCtrl())
+    out = await sch.retrain_now()
+    assert ("train", "BTC/USDT") in started and ("walkforward", "BTC/USDT") in started
+    assert sch.status()["last_retrain"] is not None and len(out["started"]) == 2
+
+
 def test_notify_level_gating() -> None:
     from cryptotrader.ops.notify import _enabled
 

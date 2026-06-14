@@ -335,6 +335,14 @@ class LiveTradingEngine:
         trade = self._portfolio.close_position(fill, exit_reason=reason)
         if self._store is not None and self._run_id is not None:
             await self._store.record_trade(self._run_id, trade)
+        if getattr(self._settings.notify, "notify_trades", False):
+            try:
+                from cryptotrader.ops.notify import notify
+                await notify(self._settings,
+                             f"{self._symbol} closed {trade.side.name} via {reason}: "
+                             f"net {trade.net_pnl:+.2f} ({self._state.environment})", level="warning")
+            except Exception:  # pragma: no cover
+                pass
 
     # ------------------------------------------------------------------ #
     # State sync

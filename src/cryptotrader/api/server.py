@@ -8,7 +8,7 @@ import logging
 from pathlib import Path
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, Response
 from pydantic import BaseModel
 
 from cryptotrader.api.controller import EngineController
@@ -42,6 +42,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.recorder = recorder
     register_management_routes(app, controller)  # /api/config + /api/train
 
+    from cryptotrader.api.scheduler import Scheduler
+
+    scheduler = Scheduler(settings, app.state.jobs, controller)
+    app.state.scheduler = scheduler
+
     _COMMON_SYMBOLS_AUTOSTART = ["BTC/USDT", "ETH/USDT", "SOL/USDT", "BNB/USDT",
                                  "XRP/USDT", "ADA/USDT", "DOGE/USDT", "LTC/USDT"]
 
@@ -53,10 +58,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                                        settings.exchange.symbol]))
             await recorder.start(syms, settings.data.recorder_interval)
             logger.info("Recorder auto-started for %d symbols", len(syms))
+        await scheduler.start()
 
     @app.on_event("shutdown")
     async def _shutdown() -> None:
         await recorder.stop()
+        await scheduler.stop()
 
     @app.get("/")
     async def index() -> FileResponse:
@@ -170,6 +177,38 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return JSONResponse({"symbol": symbol, "n": len(series),
                              "fields": fields, "series": series, "stats": stats})
 
+    @app.get("/api/observations/export")
+    async def observations_export(symbol: str, limit: int = 100_000) -> Response:
+        """Download the recorded observation history for a symbol as CSV (offline analysis)."""
+        import csv
+        import io
+        import json as _json
+
+        rows = await _read_store_all(
+            app.state.settings, lambda s: s.get_observations(symbol, limit))
+        typed = ("mid_price", "spread_bps", "ob_imbalance", "cb_premium", "funding_rate")
+        recs: list[dict] = []
+        for r in reversed(rows):
+            rec = {"timestamp": r["timestamp"]}
+            for c in typed:
+                if r[c] is not None:
+                    rec[c] = r[c]
+            if r.get("metrics"):
+                try:
+                    rec.update(_json.loads(r["metrics"]))
+                except Exception:
+                    pass
+            recs.append(rec)
+        cols = ["timestamp"] + sorted({k for rr in recs for k in rr if k != "timestamp"})
+        buf = io.StringIO()
+        w = csv.DictWriter(buf, fieldnames=cols)
+        w.writeheader()
+        for rr in recs:
+            w.writerow(rr)
+        fn = f"observations_{symbol.replace('/', '')}.csv"
+        return Response(buf.getvalue(), media_type="text/csv",
+                        headers={"Content-Disposition": f"attachment; filename={fn}"})
+
     @app.get("/api/recorder/status")
     async def recorder_status() -> JSONResponse:
         counts = await _read_store_all(app.state.settings, lambda s: s.observation_count())
@@ -262,6 +301,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         from cryptotrader.ops.logbuffer import recent_logs
 
         return JSONResponse({"lines": recent_logs(limit)})
+
+    @app.get("/api/scheduler/status")
+    async def scheduler_status() -> JSONResponse:
+        return JSONResponse(app.state.scheduler.status())
+
+    @app.post("/api/scheduler/retrain")
+    async def scheduler_retrain() -> JSONResponse:
+        """Manually trigger the auto-retrain (train + walk-forward for traded symbols)."""
+        return JSONResponse(await app.state.scheduler.retrain_now())
 
     @app.post("/api/notify/test")
     async def notify_test() -> JSONResponse:

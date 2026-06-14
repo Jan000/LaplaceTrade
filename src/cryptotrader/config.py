@@ -65,6 +65,9 @@ class DataConfig(BaseModel):
     # Live market recorder: auto-start it when the server boots (records all symbols).
     recorder_autostart: bool = False
     recorder_interval: float = 120.0   # seconds between recorder samples
+    # Scheduled auto-retrain: re-train + walk-forward the traded symbols every N days so the
+    # deployed model stays fresh on a rolling window (0 = off). Restart the engine to apply.
+    retrain_interval_days: float = 0.0
 
     def pool_for(self, primary: str) -> list[str]:
         """Training-pool symbols for ``primary`` (``train_symbols`` minus itself).
@@ -277,6 +280,7 @@ class NotificationConfig(BaseModel):
     telegram_bot_token: str | None = None
     telegram_chat_id: str | None = None
     notify_trades: bool = False            # also alert on every fill (noisy)
+    daily_summary: bool = False            # once-a-day equity/PnL summary while trading
     min_level: str = "warning"             # info | warning | critical
 
 
