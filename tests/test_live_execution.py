@@ -15,6 +15,15 @@ class FakeClient:
         self.created: list[dict] = []
         self.cancelled: list[tuple] = []
         self._n = 0
+        self.markets = {"BTC/USDT": {"limits": {"amount": {"min": 0.0001},
+                                                "cost": {"min": 10.0}}},
+                        "ETH/USDT": {"limits": {"amount": {"min": 0.001}, "cost": {"min": 10.0}}}}
+
+    async def load_markets(self):
+        return self.markets
+
+    def amount_to_precision(self, symbol, qty):
+        return round(float(qty), 3)               # 3-decimal lot step
 
     async def create_order(self, symbol, type_, side, qty, price=None, params=None):
         self._n += 1
@@ -61,3 +70,47 @@ async def test_protective_short_closes_with_buy_and_replaces() -> None:
     # Re-placing cancels the previous protective order first (never stack).
     await h.place_protective("ETH/USDT", Side.SHORT, 1.0, stop_price=111.0)
     assert ("o1", "ETH/USDT") in fake.cancelled
+
+
+@pytest.mark.asyncio
+async def test_execute_rounds_amount_and_enforces_minimum() -> None:
+    from cryptotrader.core.events import OrderEvent
+    from cryptotrader.core.types import Bar, OrderType
+    from datetime import datetime, timezone
+
+    h, fake = _handler()
+    bar = Bar(datetime.now(tz=timezone.utc), 100.0, 101.0, 99.0, 100.0, 5.0)
+
+    # Quantity rounded to the 3-decimal lot step before sending.
+    o = OrderEvent("BTC/USDT", bar.timestamp, Side.LONG, 0.123456, OrderType.MARKET, is_exit=False)
+    await h.execute(o, bar, fill_price=100.0)
+    assert fake.created[-1]["qty"] == 0.123
+
+    # An entry below the exchange min notional (0.001 * 100 = $0.1 < $10) is rejected.
+    small = OrderEvent("BTC/USDT", bar.timestamp, Side.LONG, 0.001, OrderType.MARKET, is_exit=False)
+    with pytest.raises(RuntimeError):
+        await h.execute(small, bar, fill_price=100.0)
+
+
+@pytest.mark.asyncio
+async def test_create_with_retry(monkeypatch) -> None:
+    import asyncio
+    import ccxt
+
+    async def _no_sleep(*_a, **_k):
+        return None
+
+    monkeypatch.setattr(asyncio, "sleep", _no_sleep)
+    h, _ = _handler()
+
+    calls = {"n": 0}
+
+    class Flaky:
+        async def create_order(self, *a, **k):
+            calls["n"] += 1
+            if calls["n"] < 3:
+                raise ccxt.NetworkError("transient")
+            return {"id": "ok"}
+
+    r = await h._create_with_retry(Flaky(), "BTC/USDT", "market", "buy", 1.0)
+    assert r["id"] == "ok" and calls["n"] == 3

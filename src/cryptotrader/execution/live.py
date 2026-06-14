@@ -71,6 +71,53 @@ class CCXTExecutionHandler:
             await self._client.close()  # type: ignore[func-returns-value]
             self._client = None
 
+    async def _ensure_markets(self, client) -> None:
+        if not getattr(client, "markets", None):
+            try:
+                await client.load_markets()
+            except Exception:  # pragma: no cover - network
+                logger.warning("load_markets failed; order rounding may be approximate", exc_info=True)
+
+    def _round_amount(self, client, symbol: str, qty: float) -> float:
+        """Round quantity to the market's lot/step precision (rejected otherwise)."""
+        try:
+            return float(client.amount_to_precision(symbol, qty))
+        except Exception:
+            return qty
+
+    def _below_minimum(self, client, symbol: str, qty: float, price: float) -> str | None:
+        """Reason string if the order violates the exchange's min amount / min notional."""
+        m = (getattr(client, "markets", None) or {}).get(symbol) or {}
+        limits = m.get("limits") or {}
+        amin = (limits.get("amount") or {}).get("min")
+        cmin = (limits.get("cost") or {}).get("min")
+        if amin and qty < amin:
+            return f"amount {qty} < exchange min {amin}"
+        if cmin and qty * price < cmin:
+            return f"notional {qty * price:.2f} < exchange min {cmin}"
+        return None
+
+    async def _create_with_retry(self, client, *args, attempts: int = 3, **kwargs):
+        """create_order with a few retries on transient network/exchange errors."""
+        import asyncio
+
+        try:
+            import ccxt
+            transient = (ccxt.NetworkError, ccxt.ExchangeNotAvailable,
+                         ccxt.RequestTimeout, ccxt.DDoSProtection)
+        except Exception:  # pragma: no cover
+            transient = (Exception,)
+        last = None
+        for i in range(attempts):
+            try:
+                return await client.create_order(*args, **kwargs)
+            except transient as exc:  # type: ignore[misc]
+                last = exc
+                logger.warning("[LIVE] order attempt %d/%d failed (%s); retrying",
+                               i + 1, attempts, type(exc).__name__)
+                await asyncio.sleep(1.0 + i)
+        raise last  # type: ignore[misc]
+
     async def place_protective(
         self, symbol: str, position_side: Side, quantity: float,
         stop_price: float, take_profit: float | None = None,
@@ -79,8 +126,10 @@ class CCXTExecutionHandler:
         position unmanaged. The stop-loss is the critical one; the take-profit is a
         bonus. Best-effort — failures are logged loudly but never raise."""
         client = self._ensure_client()
+        await self._ensure_markets(client)
         await self.cancel_protective(symbol)                 # never stack protective orders
         close = "sell" if position_side is Side.LONG else "buy"
+        quantity = self._round_amount(client, symbol, quantity)
         ids: list[str] = []
         try:
             r = await client.create_order(  # type: ignore[attr-defined]
@@ -121,21 +170,23 @@ class CCXTExecutionHandler:
     ) -> FillEvent:
         """Place a market order and build a FillEvent from the exchange response."""
         client = self._ensure_client()
+        await self._ensure_markets(client)
         ccxt_side = "buy" if order.side is Side.LONG else "sell"
-        logger.warning(
-            "[LIVE] placing REAL %s market order %.6f %s",
-            ccxt_side,
-            order.quantity,
-            order.symbol,
-        )
-        resp = await client.create_order(  # type: ignore[attr-defined]
-            order.symbol, "market", ccxt_side, order.quantity
-        )
+        qty = self._round_amount(client, order.symbol, order.quantity)
+        if qty <= 0:
+            raise RuntimeError(f"order quantity rounds to 0 for {order.symbol}")
+        # Enforce exchange minimums on ENTRIES (don't block exits — must always be able to close).
+        if not order.is_exit:
+            reason = self._below_minimum(client, order.symbol, qty, fill_price or reference_bar.close)
+            if reason:
+                raise RuntimeError(f"order below exchange minimum: {reason}")
+        logger.warning("[LIVE] placing REAL %s market order %.8f %s", ccxt_side, qty, order.symbol)
+        resp = await self._create_with_retry(client, order.symbol, "market", ccxt_side, qty)
 
         filled_price = float(
             resp.get("average") or resp.get("price") or reference_bar.close
         )
-        filled_qty = float(resp.get("filled") or order.quantity)
+        filled_qty = float(resp.get("filled") or qty)
         fee_obj = resp.get("fee") or {}
         fee = float(fee_obj.get("cost") or filled_price * filled_qty * self.execution_cfg.taker_fee)
 

@@ -252,7 +252,12 @@ class LiveTradingEngine:
         )
         if order is None:
             return
-        fill = await self._exec.execute(order, bar, fill_price=bar.close)
+        try:
+            fill = await self._exec.execute(order, bar, fill_price=bar.close)
+        except Exception:
+            # A rejected/sub-minimum/transient order must NOT crash the engine — skip the entry.
+            logger.warning("Entry order failed for %s; skipping this bar.", self._symbol, exc_info=True)
+            return
         self._portfolio.open_position(
             fill, order.stop_distance, order.tp_distance, order.max_hold_bars
         )
@@ -285,7 +290,14 @@ class LiveTradingEngine:
             order_type=OrderType.MARKET,
             is_exit=True,
         )
-        fill = await self._exec.execute(exit_order, bar, fill_price=fill_price)
+        try:
+            fill = await self._exec.execute(exit_order, bar, fill_price=fill_price)
+        except Exception:
+            # Exit failed (e.g. transient API error). Don't crash: the position stays open and
+            # the next bar re-attempts the exit; the native protective stop is the backstop.
+            logger.critical("EXIT ORDER FAILED for %s (%s) — position still OPEN, will retry.",
+                            self._symbol, reason, exc_info=True)
+            return
         trade = self._portfolio.close_position(fill, exit_reason=reason)
         if self._store is not None and self._run_id is not None:
             await self._store.record_trade(self._run_id, trade)
