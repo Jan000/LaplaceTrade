@@ -172,6 +172,54 @@ Walk-forward/holdout are *historical* out-of-sample; before risking funds, confi
    on the exchange (and cancel on exit) before scaling up.
 5. **Then go live small** — low `risk_per_trade`, `max_leverage` 1.0, only **ROBUST** symbols.
 
+## Running 24/7 with real money
+
+**Deploy** (auto-restarts on crash / host reboot — the correct way to get 24/7 uptime):
+
+```bash
+docker compose up -d            # http://127.0.0.1:8000 ; restart: unless-stopped
+# or bare-metal:
+sudo cp deploy/cryptotrader.service /etc/systemd/system/ && \
+  sudo systemctl enable --now cryptotrader   # Restart=always
+```
+
+Front the dashboard with a reverse proxy + auth/TLS before exposing it remotely; keep the
+container/port on localhost otherwise. `GET /api/health` is a liveness probe (and the
+Docker `HEALTHCHECK`).
+
+**Safety controls (configure before going live):**
+* **Circuit breakers** — set `risk.max_daily_loss_pct` and `risk.max_drawdown_pct` (e.g.
+  `0.05` / `0.10`). If the aggregate account breaches a limit, the engine **flattens
+  everything and halts** new entries automatically; a banner shows why, **Resume** re-enables.
+* **Kill-switch** — the red **Flatten** button (header) closes all positions at market and
+  halts instantly; `POST /api/flatten` / `/api/resume` do the same.
+* **Native protective orders** — every real entry also places an exchange-side stop-loss/TP,
+  so a stopped bot doesn't leave a position unmanaged.
+* **Alerts** — set `notify.webhook_url` (Slack/Discord) and/or `notify.telegram_bot_token` +
+  `telegram_chat_id` (token in `config/secrets.yaml`) to get halt/error alerts while away.
+* **Recorder autostart** — `data.recorder_autostart: true` keeps the microstructure recorder
+  collecting across restarts.
+
+On a real-money start the engine sizes from the **actual exchange balance** (not the
+configured number) and warns about any pre-existing open orders.
+
+### Production-readiness — what's done vs. still hardening
+
+**In place:** per-symbol guardrail (no trading a coin with another's model) · native
+stop/TP safety net · circuit breakers + kill-switch · order precision / min-notional checks
++ transient-error retries · engine survives bad orders (skip entry / retry exit) · balance
+reconciliation + open-order warning on start · alerts · health check · auto-restart via
+Docker/systemd · persistence + experiment/observation logging.
+
+**Still recommended before scaling capital (honest gaps):** full **position
+reconciliation** on restart (if a native stop fills while down, the bot restarts flat and
+won't have that trade record — protected, not reconciled) · **live-tested** order handling
+against the real exchange (the order path is unit-tested with a fake client, not yet against
+production) · authenticated/TLS dashboard for remote access · encrypted secrets at rest ·
+multi-account / larger-size slippage modelling. Treat the strategy itself as a **thin,
+window-sensitive edge** (Sharpe ~0.9, PF ~1.2 on BTC holdout) — start tiny, watch the
+forward/paper results, and scale only if the live edge holds.
+
 ## Live engine
 
 `cryptotrader.live.LiveTradingEngine` is the streaming counterpart of the

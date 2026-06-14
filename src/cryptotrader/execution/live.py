@@ -71,6 +71,32 @@ class CCXTExecutionHandler:
             await self._client.close()  # type: ignore[func-returns-value]
             self._client = None
 
+    async def fetch_equity(self, quote: str = "USDT") -> float | None:
+        """Real tradeable balance of ``quote`` on the exchange (for honest position sizing)."""
+        client = self._ensure_client()
+        try:
+            bal = await client.fetch_balance()
+            total = (bal.get("total") or {}).get(quote)
+            free = (bal.get("free") or {}).get(quote)
+            val = total if total is not None else free
+            return float(val) if val is not None else None
+        except Exception:
+            logger.warning("Could not fetch exchange balance for %s", quote, exc_info=True)
+            return None
+
+    async def open_orders_warning(self, symbols: list[str]) -> list[str]:
+        """List pre-existing open orders per symbol so the operator is aware on start."""
+        client = self._ensure_client()
+        warns: list[str] = []
+        for sym in symbols:
+            try:
+                oo = await client.fetch_open_orders(sym)
+                if oo:
+                    warns.append(f"{sym}: {len(oo)} open order(s) already on the exchange")
+            except Exception:
+                pass
+        return warns
+
     async def _ensure_markets(self, client) -> None:
         if not getattr(client, "markets", None):
             try:

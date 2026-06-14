@@ -1,0 +1,13 @@
+.git
+.venv
+__pycache__
+*.pyc
+.cache
+data
+models
+models_old
+*.sqlite*
+.pytest_cache
+pytest-cache-files-*
+tests
+config/secrets.yaml

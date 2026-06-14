@@ -97,13 +97,19 @@ class EngineController:
                                    ", ".join(s for s, _ in bad))
                 symbols = [s for s, _ in ok]
 
-            equity_each = self.settings.risk.account_equity / max(1, len(symbols))
+            # Real money: size from the ACTUAL exchange balance (and surface pre-existing
+            # open orders), not the configured number — best-effort, timeout-guarded.
+            account_equity = float(self.settings.risk.account_equity)
+            if mode == "live" and real_orders:
+                account_equity = await self._reconcile_real(symbols, account_equity)
+
+            equity_each = account_equity / max(1, len(symbols))
             environment = ("live" if real_orders else "paper") if mode == "live" else "simulation"
             self._mode = mode
             self._engines, self._states, self._tasks, self._stores = [], {}, [], []
             self._combined_curve = []
             # reset circuit-breaker baselines for the new session
-            eq0 = float(self.settings.risk.account_equity)
+            eq0 = account_equity
             self._halted = False
             self._halt_reason = None
             self._peak_equity = eq0
@@ -336,6 +342,39 @@ class EngineController:
     # ------------------------------------------------------------------ #
     # Builders / helpers (per-symbol settings)
     # ------------------------------------------------------------------ #
+    async def _reconcile_real(self, symbols: list[str], fallback: float) -> float:
+        """On real-money start: read the actual exchange balance, warn on pre-existing open
+        orders, alert. Best-effort + timeout-guarded; falls back to the configured equity."""
+        from cryptotrader.execution.live import CCXTExecutionHandler
+
+        quote = symbols[0].split("/")[1] if "/" in symbols[0] else "USDT"
+        rec = CCXTExecutionHandler(self.settings.exchange, self.settings.execution)
+        eq = fallback
+        try:
+            bal = await asyncio.wait_for(rec.fetch_equity(quote), timeout=20.0)
+            if bal and bal > 0:
+                eq = float(bal)
+                logger.warning("Real-money: account equity from exchange = %.2f %s", eq, quote)
+            else:
+                logger.warning("Could not read exchange balance; using configured %.2f", fallback)
+            warns = await asyncio.wait_for(rec.open_orders_warning(symbols), timeout=20.0)
+            for w in warns:
+                logger.warning("Reconcile: %s", w)
+            try:
+                from cryptotrader.ops.notify import notify
+
+                msg = f"🟢 LIVE trading started ({', '.join(symbols)}) — equity {eq:.2f} {quote}"
+                if warns:
+                    msg += " | ⚠ " + "; ".join(warns)
+                await notify(self.settings, msg, level="warning")
+            except Exception:  # pragma: no cover
+                pass
+        except Exception:
+            logger.warning("Real-money reconciliation failed; using configured equity.", exc_info=True)
+        finally:
+            await rec.close()
+        return eq
+
     def _build_execution(self, settings: Settings, real_orders: bool):
         if real_orders:
             from cryptotrader.execution.live import CCXTExecutionHandler

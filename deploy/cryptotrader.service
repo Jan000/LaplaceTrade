@@ -1,0 +1,23 @@
+# systemd unit for bare-metal 24/7 operation (alternative to Docker).
+#   sudo cp deploy/cryptotrader.service /etc/systemd/system/
+#   sudo systemctl daemon-reload && sudo systemctl enable --now cryptotrader
+#   journalctl -u cryptotrader -f
+[Unit]
+Description=CryptoTrader dashboard + trading engine
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=cryptotrader
+WorkingDirectory=/opt/cryptotrader
+Environment=PYTHONUNBUFFERED=1
+# Keys can live here or in config/secrets.yaml:
+# Environment=CT_EXCHANGE__API_KEY=...
+# Environment=CT_EXCHANGE__API_SECRET=...
+ExecStart=/opt/cryptotrader/.venv/bin/uvicorn cryptotrader.api.server:app --host 127.0.0.1 --port 8000
+Restart=always
+RestartSec=5
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target
