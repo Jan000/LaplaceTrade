@@ -1,18 +1,40 @@
-# 24/7 deployment: `docker compose up -d`. Auto-restarts on crash/reboot.
+# 24/7 deployment. Works with Coolify (Docker Compose build pack) and plain Docker.
+#
+# Coolify:  New Resource → Docker Compose (this repo) → set the env vars below in the UI →
+#           attach a domain (TLS is automatic) → Coolify routes it to the exposed port 8000.
+#           The named volumes persist the DB / models / cache across redeploys.
+# Standalone: uncomment the `ports:` block, then `docker compose up -d`, open :8000.
 services:
   cryptotrader:
     build: .
-    container_name: cryptotrader
-    restart: unless-stopped            # crash-recovery / survives host reboot
-    ports:
-      - "127.0.0.1:8000:8000"          # localhost only — front with a reverse proxy + auth for remote
-    volumes:
-      - ./data:/app/data               # SQLite DB (trades, equity, observations)
-      - ./models:/app/models           # trained models + experiments.jsonl
-      - ./.cache:/app/.cache           # OHLCV cache
-      - ./config:/app/config           # config.yaml + secrets.yaml (keys)
+    restart: unless-stopped              # crash-recovery / survives host reboot
+    expose:
+      - "8000"                           # internal; Coolify's proxy serves your domain on it
+    # ports:                             # ← uncomment for standalone (no Coolify proxy)
+    #   - "8000:8000"
     environment:
-      # API keys may also live in config/secrets.yaml; env wins.
+      # Secrets — set these in the Coolify env panel (NOT committed). CT_* maps to the
+      # nested config (CT_DASHBOARD__AUTH_PASSWORD -> dashboard.auth_password, etc.).
       - CT_EXCHANGE__API_KEY=${CT_EXCHANGE__API_KEY:-}
       - CT_EXCHANGE__API_SECRET=${CT_EXCHANGE__API_SECRET:-}
-    stop_grace_period: 30s             # let the engine flatten/clean up on shutdown
+      - CT_DASHBOARD__AUTH_USER=${CT_DASHBOARD__AUTH_USER:-admin}
+      - CT_DASHBOARD__AUTH_PASSWORD=${CT_DASHBOARD__AUTH_PASSWORD:-}   # set to require login
+      - CT_NOTIFY__WEBHOOK_URL=${CT_NOTIFY__WEBHOOK_URL:-}
+      - CT_NOTIFY__TELEGRAM_BOT_TOKEN=${CT_NOTIFY__TELEGRAM_BOT_TOKEN:-}
+      - CT_NOTIFY__TELEGRAM_CHAT_ID=${CT_NOTIFY__TELEGRAM_CHAT_ID:-}
+    volumes:
+      - ct_data:/app/data                # SQLite DB (trades, equity, observations)
+      - ct_models:/app/models            # trained models + experiments.jsonl + scheduler state
+      - ct_cache:/app/.cache             # OHLCV cache
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8000/api/health"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    stop_grace_period: 30s               # let the engine flatten / clean up on shutdown
+
+volumes:
+  ct_data:
+  ct_models:
+  ct_cache:

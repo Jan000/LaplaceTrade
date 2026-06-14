@@ -177,15 +177,35 @@ Walk-forward/holdout are *historical* out-of-sample; before risking funds, confi
 **Deploy** (auto-restarts on crash / host reboot — the correct way to get 24/7 uptime):
 
 ```bash
-docker compose up -d            # http://127.0.0.1:8000 ; restart: unless-stopped
+# standalone Docker (uncomment the ports: block in docker-compose.yml first):
+docker compose up -d
 # or bare-metal:
 sudo cp deploy/cryptotrader.service /etc/systemd/system/ && \
   sudo systemctl enable --now cryptotrader   # Restart=always
 ```
 
-Front the dashboard with a reverse proxy + auth/TLS before exposing it remotely; keep the
-container/port on localhost otherwise. `GET /api/health` is a liveness probe (and the
-Docker `HEALTHCHECK`).
+### Deploy on Coolify (Ubuntu server)
+
+The repo is Coolify-ready (Docker Compose build pack, named volumes, env-based secrets,
+health check):
+
+1. **New Resource → Docker Compose**, point it at this Git repo (it uses `docker-compose.yml`).
+2. **Environment variables** (Coolify panel) — see `.env.example`. At minimum set
+   `CT_DASHBOARD__AUTH_PASSWORD` (require login) and, for real trading,
+   `CT_EXCHANGE__API_KEY` / `CT_EXCHANGE__API_SECRET` (start with `CT_EXCHANGE__TESTNET=true`).
+   Every `CT_*` var maps to the nested config, so any setting is overridable here.
+3. **Domain** — attach one; Coolify's proxy terminates **TLS automatically** and routes it to
+   the container's exposed port 8000 (the app trusts `X-Forwarded-*` via `--proxy-headers`).
+4. **Persistent storage** — the named volumes `ct_data` / `ct_models` / `ct_cache` keep the
+   DB, trained models and cache across redeploys. `config.yaml` is baked into the image
+   (commit your tuned one); **secrets come from the env vars above**, never a mounted file.
+5. **Health check** — `GET /api/health` (already in the compose/Dockerfile); Coolify shows
+   the container healthy and restarts it if not.
+6. After the first deploy the model is the baseline — open the dashboard, **train** your
+   symbol(s), set the circuit breakers, then go live (testnet first).
+
+`/api/health` stays open without auth for the probe; everything else requires the login once
+`CT_DASHBOARD__AUTH_PASSWORD` is set.
 
 **Safety controls (configure before going live):**
 * **Circuit breakers** — set `risk.max_daily_loss_pct` and `risk.max_drawdown_pct` (e.g.
