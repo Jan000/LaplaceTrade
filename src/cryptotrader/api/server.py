@@ -244,6 +244,28 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         await controller.stop()
         return JSONResponse({"status": "stopped"})
 
+    @app.post("/api/flatten")
+    async def flatten() -> JSONResponse:
+        """Kill-switch: close all open positions at market and halt new entries."""
+        return JSONResponse(await controller.flatten_all("manual kill-switch"))
+
+    @app.post("/api/resume")
+    async def resume() -> JSONResponse:
+        """Clear a halt (manual or circuit-breaker) so trading can resume."""
+        return JSONResponse(controller.resume())
+
+    @app.get("/api/health")
+    async def health() -> JSONResponse:
+        """Liveness/health for 24/7 monitoring (uptime checks, load balancers)."""
+        snap = controller.snapshot()
+        return JSONResponse({
+            "status": "ok",
+            "engine": snap.get("status", "idle"),
+            "halted": snap.get("halted", False),
+            "recorder_running": app.state.recorder.is_running,
+            "symbols": [s["symbol"] for s in snap.get("symbols", [])],
+        })
+
     @app.get("/api/trades")
     async def trades(
         limit: int = 200, run_id: str | None = None, env: str | None = None

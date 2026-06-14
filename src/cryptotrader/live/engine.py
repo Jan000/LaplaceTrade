@@ -89,6 +89,8 @@ class LiveTradingEngine:
         self._portfolio = Portfolio(settings.risk.account_equity, self._symbol)
         self._latest_atr: float = 0.0
         self._stop = False
+        self._halted = False          # circuit-breaker: block new entries (existing position kept/flattened)
+        self._last_bar: Bar | None = None
         self._cooldown_bars = settings.risk.cooldown_bars
         self._cooldown_remaining = 0
         self._trades_seen = 0
@@ -129,6 +131,28 @@ class LiveTradingEngine:
         """Request a graceful stop after the current bar."""
         self._stop = True
 
+    def halt(self) -> None:
+        """Block new entries (circuit breaker). Any open position is left as-is."""
+        self._halted = True
+
+    def resume(self) -> None:
+        self._halted = False
+
+    @property
+    def halted(self) -> bool:
+        return self._halted
+
+    async def flatten(self, reason: str = "kill_switch") -> None:
+        """Immediately close any open position at the last price and halt new entries.
+
+        Used by the controller's kill-switch / circuit breaker. Safe to call when flat.
+        """
+        self._halted = True
+        if self._portfolio.has_position and self._last_bar is not None:
+            await self._exit(self._last_bar, reason=reason, fill_price=self._last_bar.close)
+            self._portfolio.mark(self._last_bar.timestamp, self._last_bar.close)
+            await self._sync_state(self._last_bar)
+
     # ------------------------------------------------------------------ #
     # Per-bar loop
     # ------------------------------------------------------------------ #
@@ -168,6 +192,7 @@ class LiveTradingEngine:
 
     async def _on_bar(self, event: MarketEvent) -> None:
         bar = event.bar
+        self._last_bar = bar
 
         if self._cooldown_remaining > 0:
             self._cooldown_remaining -= 1
@@ -187,7 +212,7 @@ class LiveTradingEngine:
 
         # (3) Act on the signal.
         if signal is not None and signal.side is not Side.FLAT:
-            if not self._portfolio.has_position and self._cooldown_remaining == 0:
+            if not self._portfolio.has_position and self._cooldown_remaining == 0 and not self._halted:
                 await self._try_enter(signal, bar)
             elif self._portfolio.has_position and signal.side is not self._portfolio.position_side:
                 await self._exit(bar, reason="signal", fill_price=bar.close)

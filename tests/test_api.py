@@ -155,6 +155,63 @@ def test_controller_aggregate_snapshot() -> None:
     assert {s["symbol"] for s in snap["symbols"]} == {"BTC/USDT", "ETH/USDT"}
 
 
+def test_circuit_breaker_detects_limits() -> None:
+    from datetime import datetime, timezone
+
+    from cryptotrader.api.controller import EngineController
+    from cryptotrader.live.state import EngineState
+
+    s = Settings()
+    s.risk.max_daily_loss_pct = 0.05
+    s.risk.max_drawdown_pct = 0.10
+    c = EngineController(s)
+    st = EngineState(symbol="BTC/USDT")
+    st.initial_equity, st.equity = 10_000, 9_400          # −6% on the day
+    c._states = {"BTC/USDT": st}
+    c._day = datetime.now(tz=timezone.utc).date().isoformat()
+    c._day_start_equity, c._peak_equity, c._halted = 10_000, 10_000, False
+    assert "daily loss" in (c._risk_breach() or "")        # 6% ≥ 5%
+
+    st.equity = 9_600                                       # −4% day, −4% DD: within limits
+    c._day_start_equity, c._peak_equity = 10_000, 10_000
+    assert c._risk_breach() is None
+
+    st.equity = 9_800                                       # DD from an 11k peak = 10.9% ≥ 10%
+    c._day_start_equity, c._peak_equity = 9_800, 11_000
+    assert "drawdown" in (c._risk_breach() or "")
+
+    c._halted = True                                       # halted -> no further breach
+    assert c._risk_breach() is None
+
+
+async def test_flatten_all_and_resume(monkeypatch) -> None:
+    from cryptotrader.api.controller import EngineController
+
+    calls = []
+
+    class FakeEngine:
+        async def flatten(self, reason):
+            calls.append(("flatten", reason))
+
+        def resume(self):
+            calls.append(("resume", None))
+
+    c = EngineController(Settings())
+    c._engines = [FakeEngine(), FakeEngine()]
+    r = await c.flatten_all("unit test")
+    assert c._halted and r["halted"] and sum(1 for x in calls if x[0] == "flatten") == 2
+    c.resume()
+    assert not c._halted and any(x[0] == "resume" for x in calls)
+
+
+def test_notify_level_gating() -> None:
+    from cryptotrader.ops.notify import _enabled
+
+    cfg = Settings().notify  # min_level default "warning"
+    assert _enabled(cfg, "warning") and _enabled(cfg, "critical")
+    assert not _enabled(cfg, "info")
+
+
 def test_jobmanager_concurrent_logic(tmp_path, monkeypatch) -> None:
     """JobManager tracks several jobs at once, keyed by kind:symbol (no real subprocess)."""
     import cryptotrader.api.management as mgmt

@@ -189,6 +189,12 @@ class RiskConfig(BaseModel):
     cooldown_bars: int = 3
     use_ev_filter: bool = False        # EV gate: P(win)*tp-(1-P(win))*sl-cost > min_ev
     min_expected_value: float = 0.0    # minimum expected value per unit to trade
+    # --- Circuit breakers (real-money safety; 0 = disabled) ---
+    # If the aggregate account drops by this fraction intraday or from its session peak,
+    # the controller flattens everything and HALTS new entries until you resume.
+    max_daily_loss_pct: float = 0.0    # e.g. 0.05 = halt after a 5% loss since UTC day start
+    max_drawdown_pct: float = 0.0      # e.g. 0.10 = halt after a 10% drop from session peak
+    max_consecutive_losses: int = 0    # halt after N losing trades in a row (0 = disabled)
 
 
 class ExecutionConfig(BaseModel):
@@ -259,6 +265,20 @@ class BarrierConfig(BaseModel):
         return self.ts_max_window if self.label_method == "trend_scan" else self.horizon
 
 
+class NotificationConfig(BaseModel):
+    """Out-of-band alerts (best-effort) for unattended 24/7 operation.
+
+    Secrets (telegram_bot_token) belong in the git-ignored config/secrets.yaml, not
+    config.yaml. ``min_level`` gates which messages are sent: info < warning < critical.
+    """
+
+    webhook_url: str | None = None         # generic JSON POST {"text": ...} (Slack/Discord/…)
+    telegram_bot_token: str | None = None
+    telegram_chat_id: str | None = None
+    notify_trades: bool = False            # also alert on every fill (noisy)
+    min_level: str = "warning"             # info | warning | critical
+
+
 class PersistenceConfig(BaseModel):
     db_path: Path = Path("data/cryptotrader.sqlite")
 
@@ -283,6 +303,7 @@ class Settings(BaseSettings):
     strategy: StrategyConfig = Field(default_factory=StrategyConfig)
     barriers: BarrierConfig = Field(default_factory=BarrierConfig)
     persistence: PersistenceConfig = Field(default_factory=PersistenceConfig)
+    notify: NotificationConfig = Field(default_factory=NotificationConfig)
 
     # Source priority (first = highest): init kwargs > environment > YAML > defaults.
     # This is what makes CT_* env vars actually override config.yaml.

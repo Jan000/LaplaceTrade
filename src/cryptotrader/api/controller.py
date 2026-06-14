@@ -50,6 +50,13 @@ class EngineController:
         self._combined_curve: list[dict] = []
         self._mode = "simulation"
         self._lock = asyncio.Lock()
+        # Circuit-breaker / kill-switch state.
+        self._halted = False
+        self._halt_reason: str | None = None
+        self._peak_equity: float | None = None
+        self._day_start_equity: float | None = None
+        self._day: str | None = None
+        self._breaker_active = False   # guards against re-entrant flatten
 
     @property
     def is_running(self) -> bool:
@@ -95,6 +102,14 @@ class EngineController:
             self._mode = mode
             self._engines, self._states, self._tasks, self._stores = [], {}, [], []
             self._combined_curve = []
+            # reset circuit-breaker baselines for the new session
+            eq0 = float(self.settings.risk.account_equity)
+            self._halted = False
+            self._halt_reason = None
+            self._peak_equity = eq0
+            self._day_start_equity = eq0
+            self._day = datetime.now(tz=timezone.utc).date().isoformat()
+            self._breaker_active = False
 
             for sym in symbols:
                 await self._start_one(sym, mode, real_orders, equity_each, environment, sim_days)
@@ -149,7 +164,7 @@ class EngineController:
         engine = LiveTradingEngine(
             data_handler=data_handler, feature_engine=feature_engine, strategy=strategy,
             risk_manager=risk, execution_handler=execution, settings=sub, state=state,
-            store=store, warmup_bars=warmup_bars, on_update=self._publish_aggregate,
+            store=store, warmup_bars=warmup_bars, on_update=self._on_engine_update,
         )
         self._engines.append(engine)
         self._tasks.append(asyncio.create_task(self._run_guarded(engine)))
@@ -182,6 +197,79 @@ class EngineController:
                 st.status = "stopped"
             self.state.status = "stopped"
             self._publish_aggregate()
+
+    # ------------------------------------------------------------------ #
+    # Circuit breaker / kill-switch
+    # ------------------------------------------------------------------ #
+    def _on_engine_update(self) -> None:
+        """Called on every engine state change: run the risk check, then publish."""
+        self._check_circuit_breaker()
+        self._publish_aggregate()
+
+    def _risk_breach(self) -> str | None:
+        """Reason string if a circuit-breaker limit is currently breached, else None."""
+        r = self.settings.risk
+        states = list(self._states.values())
+        if not states or self._halted:
+            return None
+        eq = sum(s.equity for s in states)
+        if eq <= 0:
+            return None
+        # daily reset (UTC) — re-baseline at the start of each day
+        today = datetime.now(tz=timezone.utc).date().isoformat()
+        if today != self._day:
+            self._day, self._day_start_equity, self._peak_equity = today, eq, eq
+        self._peak_equity = max(self._peak_equity or eq, eq)
+        if r.max_daily_loss_pct > 0 and self._day_start_equity:
+            if (self._day_start_equity - eq) / self._day_start_equity >= r.max_daily_loss_pct:
+                return (f"daily loss limit hit "
+                        f"({(1 - eq / self._day_start_equity) * 100:.1f}% ≥ "
+                        f"{r.max_daily_loss_pct * 100:.0f}%)")
+        if r.max_drawdown_pct > 0 and self._peak_equity:
+            if (self._peak_equity - eq) / self._peak_equity >= r.max_drawdown_pct:
+                return (f"max drawdown hit "
+                        f"({(1 - eq / self._peak_equity) * 100:.1f}% ≥ "
+                        f"{r.max_drawdown_pct * 100:.0f}%)")
+        return None
+
+    def _check_circuit_breaker(self) -> None:
+        if self._halted or self._breaker_active:
+            return
+        reason = self._risk_breach()
+        if reason:
+            self._breaker_active = True
+            logger.warning("CIRCUIT BREAKER: %s — flattening & halting.", reason)
+            asyncio.create_task(self.flatten_all(f"circuit breaker: {reason}"))
+
+    async def flatten_all(self, reason: str = "manual kill-switch") -> dict:
+        """Close every open position at market and halt new entries (operator or breaker)."""
+        self._halted = True
+        self._halt_reason = reason
+        for e in self._engines:
+            try:
+                await e.flatten(reason)
+            except Exception:  # pragma: no cover - defensive
+                logger.exception("flatten failed for an engine")
+        try:
+            from cryptotrader.ops.notify import notify
+
+            await notify(self.settings, f"⛔ Trading HALTED — {reason}", level="critical")
+        except Exception:  # pragma: no cover
+            pass
+        self._publish_aggregate()
+        logger.warning("All positions flattened & trading halted: %s", reason)
+        return {"halted": True, "reason": reason}
+
+    def resume(self) -> dict:
+        """Clear the halt so engines can take new entries again."""
+        self._halted = False
+        self._halt_reason = None
+        self._breaker_active = False
+        self._peak_equity = sum(s.equity for s in self._states.values()) or self._peak_equity
+        for e in self._engines:
+            e.resume()
+        self._publish_aggregate()
+        return {"halted": False}
 
     # ------------------------------------------------------------------ #
     # Aggregate snapshot
@@ -241,6 +329,8 @@ class EngineController:
             "recent_trades": trades[:25],
             "equity_curve": (single.equity_curve if single else self._combined_curve),
             "symbols": per_symbol,
+            "halted": self._halted,
+            "halt_reason": self._halt_reason,
         }
 
     # ------------------------------------------------------------------ #

@@ -87,8 +87,11 @@
       </label>
       <button id="start" class="primary">Start</button>
       <button id="stop" class="danger" disabled>Stop</button>
+      <button id="flatten" class="danger" title="Kill-switch: close all open positions at market and halt new entries" disabled>Flatten</button>
+      <button id="resume" class="ghost hidden" title="Clear the halt and allow new entries">Resume</button>
     </div>
   </div>
+  <div id="halt-banner" class="hidden" style="background:#3a1212;border:1px solid var(--red);color:#ffb4b4;padding:8px 14px;font-size:13px"></div>
   <nav class="tabs">
     <button id="tab-monitor" class="primary">Monitor</button>
     <button id="tab-symbols" class="ghost">Symbols</button>
@@ -390,6 +393,12 @@ function render(s){
     liveN=s.n_trades; refreshRunSelectors(); loadTrades();
   }
   liveN=s.n_trades; prevStatus=s.status;
+  // Circuit-breaker / kill-switch banner + controls.
+  const halted=!!s.halted, running=s.status==="running";
+  $("halt-banner").classList.toggle("hidden", !halted);
+  if(halted) $("halt-banner").textContent="⛔ TRADING HALTED — "+(s.halt_reason||"kill-switch")+". Positions flattened; new entries blocked. Press Resume to re-enable.";
+  $("flatten").disabled = !running || halted;
+  $("resume").classList.toggle("hidden", !halted);
   if(viewingRun!==null) return;
   $("sym").textContent=s.symbol||"—";
   const envtxt=s.environment==="live"?"⚠ REAL MONEY":(s.environment||s.mode);
@@ -451,6 +460,10 @@ $("start").onclick=async()=>{
     if(!x.ok){const b=await x.json().catch(()=>({}));$("mode-label").textContent="error: "+(b.error||x.statusText);$("status-dot").className="dot error";setRunning(false);}}
   catch(e){$("mode-label").textContent="error: cannot reach server";setRunning(false);}};
 $("stop").onclick=async()=>{$("stop").disabled=true;await fetch("/api/stop",{method:"POST"});setRunning(false);};
+$("flatten").onclick=async()=>{
+  if(!confirm("KILL-SWITCH: close ALL open positions at market now and halt new entries?")) return;
+  $("flatten").disabled=true; await fetch("/api/flatten",{method:"POST"}); };
+$("resume").onclick=async()=>{ await fetch("/api/resume",{method:"POST"}); };
 function connect(){const proto=location.protocol==="https:"?"wss":"ws";
   const ws=new WebSocket(`${proto}://${location.host}/ws`);
   ws.onmessage=(e)=>{const s=JSON.parse(e.data);render(s);setRunning(s.status==="running");};
