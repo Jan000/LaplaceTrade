@@ -204,6 +204,17 @@ async def test_flatten_all_and_resume(monkeypatch) -> None:
     assert not c._halted and any(x[0] == "resume" for x in calls)
 
 
+def test_config_redacts_secrets() -> None:
+    from cryptotrader.api.management import _redact
+
+    cfg = {"exchange": {"api_key": "k", "api_secret": "s"},
+           "notify": {"telegram_bot_token": "tok", "webhook_url": "https://hook"}}
+    r = _redact(cfg)
+    assert r["exchange"]["api_key"] is None and r["exchange"]["api_secret"] is None
+    assert r["notify"]["telegram_bot_token"] is None      # secret hidden
+    assert r["notify"]["webhook_url"] == "https://hook"   # non-secret kept
+
+
 def test_notify_level_gating() -> None:
     from cryptotrader.ops.notify import _enabled
 

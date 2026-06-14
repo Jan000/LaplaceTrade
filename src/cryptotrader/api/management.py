@@ -46,6 +46,9 @@ def _redact(cfg: dict) -> dict:
         for k in _SECRET_KEYS:
             if k in ex:
                 ex[k] = None
+    nt = cfg.get("notify")
+    if isinstance(nt, dict) and nt.get("telegram_bot_token"):
+        nt["telegram_bot_token"] = None      # never echo the bot token
     return cfg
 
 

@@ -476,14 +476,14 @@ fetch("/api/state").then(r=>r.json()).then(s=>{render(s);
 
 /* ---------- config editor (schema-driven, friendly controls) ---------- */
 let CONFIG={};
-const EDIT_SECTIONS=["exchange","data","features","model","risk","execution","strategy","barriers"];
+const EDIT_SECTIONS=["exchange","data","features","model","risk","execution","strategy","barriers","notify"];
 const SYMBOLS=["BTC/USDT","ETH/USDT","SOL/USDT","BNB/USDT","XRP/USDT","ADA/USDT","DOGE/USDT","LTC/USDT","AVAX/USDT","LINK/USDT"];
 const TIMEFRAMES=["1m","5m","15m","30m","1h","4h","1d"];
 const EXCHANGES=["binance","binanceus","bybit","kraken","coinbase","okx","kucoin"];
 const SECTION_TITLE={exchange:"Exchange & market",data:"Data & simulation",
   barriers:"Trade barriers (TP / SL / horizon)",risk:"Risk & sizing",strategy:"Strategy filters",
-  execution:"Execution & costs",model:"Model",features:"Feature windows"};
-const SECTION_ORDER=["exchange","data","barriers","risk","strategy","execution","model","features"];
+  execution:"Execution & costs",model:"Model",features:"Feature windows",notify:"Alerts (webhook / Telegram)"};
+const SECTION_ORDER=["exchange","data","barriers","risk","strategy","execution","notify","model","features"];
 const F={
   "exchange.id":{label:"Exchange",ctl:"select",options:EXCHANGES,help:"ccxt exchange id"},
   "exchange.symbol":{label:"Symbol",ctl:"select",options:SYMBOLS,help:"Market to trade — manage all symbols in the Symbols tab"},
@@ -556,7 +556,7 @@ function loadConfig(){
     const common=[], adv=[];
     for(const sec of SECTION_ORDER){
       const obj=cfg[sec]||{};
-      const keys=Object.keys(obj).filter(k=>!["api_key","api_secret"].includes(k));
+      const keys=Object.keys(obj).filter(k=>!["api_key","api_secret","telegram_bot_token"].includes(k));
       const c=keys.filter(k=>!isAdvanced(sec,k)), a=keys.filter(k=>isAdvanced(sec,k));
       const title=SECTION_TITLE[sec]||sec;
       if(c.length) common.push(`<fieldset><legend>${title}</legend>${c.map(k=>fieldHtml(sec,k,obj[k])).join("")}</fieldset>`);
@@ -570,7 +570,7 @@ function loadConfig(){
 function collectConfig(){
   const out={};
   for(const sec of EDIT_SECTIONS){const obj=CONFIG[sec]||{};out[sec]={};
-    for(const k of Object.keys(obj)){if(["api_key","api_secret"].includes(k))continue;
+    for(const k of Object.keys(obj)){if(["api_key","api_secret","telegram_bot_token"].includes(k))continue;
       const el=$(`cfg__${sec}__${k}`); if(!el)continue; const orig=obj[k];
       let v; if(typeof orig==="boolean")v=el.checked;
       else if(Array.isArray(orig)){const parts=el.value.split(",").map(x=>x.trim()).filter(x=>x);
