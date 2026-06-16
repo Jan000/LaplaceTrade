@@ -165,6 +165,16 @@ class MLConfig(BaseModel):
     # held-out tail of the primary training data, so the entry thresholds / EV gate are meaningful.
     use_calibration: bool = False
     calibration_fraction: float = 0.2       # tail of primary train data held out to fit the temperature
+    # LightGBM threads per fit. 0 = leave headroom (half the cores) so concurrent jobs (train +
+    # walk-forward), the recorder and the live engine don't oversubscribe the CPU on a small
+    # server/container; -1 = all cores; N = exactly N. Bound this on Coolify (e.g. 1–2).
+    n_jobs: int = 0
+
+    def resolved_n_jobs(self) -> int:
+        if self.n_jobs > 0 or self.n_jobs == -1:
+            return self.n_jobs
+        import os
+        return max(1, (os.cpu_count() or 4) // 2)   # 0 -> half the cores (concurrency headroom)
 
     def to_lgbm_params(self) -> dict[str, Any]:
         return {
@@ -181,7 +191,7 @@ class MLConfig(BaseModel):
             "reg_lambda": self.reg_lambda,
             "class_weight": self.class_weight,
             "random_state": self.random_state,
-            "n_jobs": -1,
+            "n_jobs": self.resolved_n_jobs(),
             "verbosity": -1,
         }
 

@@ -3,7 +3,7 @@
 
 from __future__ import annotations
 
-from cryptotrader.config import DataConfig
+from cryptotrader.config import DataConfig, MLConfig
 
 
 def test_pool_for_never_leaves_a_symbol_unaugmented() -> None:
@@ -16,6 +16,16 @@ def test_pool_for_never_leaves_a_symbol_unaugmented() -> None:
     assert DataConfig(train_symbols=["BTC/USDT"]).pool_for("BTC/USDT") == ["ETH/USDT"]
     # An explicitly empty pool (no augmentation intended) is respected.
     assert DataConfig(train_symbols=[]).pool_for("ETH/USDT") == []
+
+
+def test_resolved_n_jobs_bounds_threads() -> None:
+    import os
+
+    assert MLConfig(n_jobs=2).resolved_n_jobs() == 2          # explicit
+    assert MLConfig(n_jobs=-1).resolved_n_jobs() == -1        # all cores (opt-in)
+    auto = MLConfig(n_jobs=0).resolved_n_jobs()               # default: half the cores, >=1
+    assert auto == max(1, (os.cpu_count() or 4) // 2) and auto >= 1
+    assert MLConfig(n_jobs=0).to_lgbm_params()["n_jobs"] == auto
 
 
 def test_candidate_promote_and_discard(tmp_path, monkeypatch) -> None:

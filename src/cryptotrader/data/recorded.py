@@ -38,7 +38,7 @@ def load_recorded(db_path, symbol: str) -> pd.DataFrame:
     if not p.exists():
         return pd.DataFrame()
     try:
-        con = sqlite3.connect(str(p))
+        con = sqlite3.connect(str(p), timeout=10.0)   # wait, don't error, if the recorder is writing
         con.row_factory = sqlite3.Row
         rows = con.execute(
             "SELECT timestamp, ob_imbalance, spread_bps, metrics FROM observations "
