@@ -473,6 +473,14 @@ class EngineController:
 
         from cryptotrader.ml.registry import holdout_path_for
 
+        def _rec(df):
+            """Merge recorded microstructure obs so a recorded-data model is replayed correctly."""
+            if settings.features.use_recorded and df is not None and not df.empty:
+                from cryptotrader.data.recorded import merge_recorded
+                return merge_recorded(df, settings.persistence.db_path,
+                                      settings.exchange.symbol, settings.exchange.timeframe)
+            return df
+
         # "recent": test the model on the last N days of real data. Fetch N days PLUS the
         # feature warm-up lead-in, so warm-up bars (which never trade — features still NaN)
         # are consumed first and all trades fall inside the requested window.
@@ -495,7 +503,7 @@ class EngineController:
                 logger.info("Simulation: replaying last %d days of %s (+%d warm-up days, %d bars)",
                             settings.data.sim_days, settings.exchange.symbol, warmup_days, len(df))
                 if not df.empty:
-                    return df
+                    return _rec(df)
             except Exception:
                 logger.exception("Simulation recent-window fetch failed for %s; using synthetic.",
                                  settings.exchange.symbol)
@@ -505,11 +513,11 @@ class EngineController:
 
         replay = settings.data.replay_file
         if replay is not None and Path(replay).exists():
-            return pd.read_parquet(replay)
+            return _rec(pd.read_parquet(replay))
         per_symbol = holdout_path_for(settings.exchange.symbol)
         if per_symbol.exists():
             logger.info("Simulation: replaying held-out slice %s", per_symbol)
-            return pd.read_parquet(per_symbol)
+            return _rec(pd.read_parquet(per_symbol))
         if settings.data.sim_source != "synthetic":
             feed = MarketDataFeed(
                 exchange_id=settings.exchange.id, symbol=settings.exchange.symbol,
@@ -519,7 +527,7 @@ class EngineController:
                 start = datetime.now(tz=timezone.utc) - timedelta(days=settings.data.sim_days)
                 df = await feed.fetch_history(start)
                 if not df.empty:
-                    return df
+                    return _rec(df)
             except Exception:
                 logger.exception("Simulation real-data fetch failed for %s; using synthetic.",
                                  settings.exchange.symbol)

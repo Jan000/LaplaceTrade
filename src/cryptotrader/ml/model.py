@@ -361,7 +361,10 @@ class LightGBMPredictor:
         cols = self._feature_names or [
             c for c in features.columns if c not in _NON_FEATURE_COLS and c not in self._drop
         ]
-        return self._model.predict_proba(features[cols])
+        # reindex (not features[cols]) so a column the model expects but that's absent here
+        # (config drift / a source temporarily unavailable) is zero-filled rather than raising
+        # — consistent with how the feature engine zero-fills absent optional sources.
+        return self._model.predict_proba(features.reindex(columns=cols, fill_value=0.0))
 
     def predict_batch(self, features: pd.DataFrame) -> list[Prediction]:
         proba = self.predict_proba_matrix(features)

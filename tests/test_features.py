@@ -70,3 +70,27 @@ def test_incremental_matches_batch() -> None:
         rtol=1e-6,
         atol=1e-8,
     )
+
+
+def test_predict_zero_fills_missing_columns() -> None:
+    """predict tolerates config drift: a feature the model expects but that's absent is
+    zero-filled (not a KeyError), and extra columns are dropped."""
+    import numpy as np
+    import pandas as pd
+
+    from cryptotrader.ml.model import LightGBMPredictor
+
+    p = LightGBMPredictor()
+    p._feature_names = ["a", "b", "c"]
+    seen = {}
+
+    class _M:
+        def predict_proba(self, X):
+            seen["cols"] = list(X.columns)
+            seen["b0"] = float(X["b"].iloc[0])
+            return np.tile([0.2, 0.3, 0.5], (len(X), 1))
+
+    p._model = _M()
+    df = pd.DataFrame({"a": [1.0, 2.0], "c": [3.0, 4.0], "x": [9.0, 9.0]})  # missing b, extra x
+    out = p.predict_proba_matrix(df)
+    assert seen["cols"] == ["a", "b", "c"] and seen["b0"] == 0.0 and out.shape == (2, 3)
