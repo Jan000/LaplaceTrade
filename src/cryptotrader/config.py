@@ -128,6 +128,10 @@ class FeatureConfig(BaseModel):
     use_coinbase_premium: bool = False
     premium_exchange: str = "coinbase"
     premium_fetch_tf: str = "1h"     # Coinbase has no 4h; fetch finer and resample to the base tf
+    # Use the live recorder's microstructure observations (order-book imbalance, microprice,
+    # depth, taker flow, spread) as features. Only populated where data was recorded — older
+    # bars are zero-filled, so train on the recorded window (optionally + history).
+    use_recorded: bool = False
     # --- Optional extra data sources (all opt-in; features computed only when
     # the source columns are present in the OHLCV frame) ---
     use_taker_flow: bool = False     # taker buy/sell volume + trade count (Binance klines)

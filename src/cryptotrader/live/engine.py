@@ -240,6 +240,16 @@ class LiveTradingEngine:
             self._trades_seen = len(self._portfolio.trades)
             self._cooldown_remaining = self._cooldown_bars
 
+        # Recorded microstructure features: feed the latest live observation to the engine
+        # so the model's rec_* features reflect the current order book / flow.
+        if getattr(self._features, "use_recorded", False) and self._store is not None:
+            try:
+                from cryptotrader.data.recorded import latest_obs_dict
+                rows = await self._store.get_observations(self._symbol, 1)
+                self._features.set_external(latest_obs_dict(rows))
+            except Exception:  # pragma: no cover - defensive
+                pass
+
         # (2) Strategy signal (incremental feature update happens inside).
         signal = self._strategy.on_market(event)
         self._latest_atr = self._current_atr()

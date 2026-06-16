@@ -84,6 +84,12 @@ async def load_ohlcv(settings: Settings, args: argparse.Namespace) -> pd.DataFra
             from cryptotrader.data.sources import enrich_ohlcv
 
             df = await enrich_ohlcv(settings, df, start, feed)  # optional extra sources
+            if settings.features.use_recorded:
+                from cryptotrader.data.recorded import merge_recorded
+
+                df = merge_recorded(df, settings.persistence.db_path,
+                                    args.symbol or settings.exchange.symbol,
+                                    settings.exchange.timeframe)
     except Exception as exc:  # network / TLS / proxy / geo-block / bad symbol
         cause = exc.__cause__
         cause_txt = f"{type(cause).__name__}: {cause}" if cause is not None else "(none)"
@@ -170,6 +176,9 @@ def main() -> None:
     parser.add_argument("--sl-mult", type=float, default=None, help="stop-loss in ATR")
     parser.add_argument("--out", type=str, default=None,
                         help="model output path (default: models/model_<SYMBOL>.pkl)")
+    parser.add_argument("--candidate", action="store_true",
+                        help="write a CANDIDATE model (models/candidate_<SYMBOL>.pkl) without "
+                             "touching the active one — validate, then promote in the dashboard")
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
@@ -239,9 +248,16 @@ def main() -> None:
     train_weights = pd.concat([p[2] for p in parts]).reset_index(drop=True)
 
     # --- Train + save (all hyperparameters come from MLConfig) -------------
-    from cryptotrader.ml.registry import holdout_path_for, model_path_for, write_meta
+    from cryptotrader.ml.registry import (
+        candidate_path_for, holdout_path_for, model_path_for, write_meta,
+    )
 
-    out_path = Path(args.out) if args.out else model_path_for(settings.exchange.symbol)
+    if args.out:
+        out_path = Path(args.out)
+    elif args.candidate:
+        out_path = candidate_path_for(settings.exchange.symbol)
+    else:
+        out_path = model_path_for(settings.exchange.symbol)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     if settings.model.use_meta_labeling:
         from cryptotrader.ml.meta import train_meta_labeled

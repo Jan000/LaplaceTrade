@@ -132,12 +132,15 @@ class MicrostructureFeatureEngine(FeatureCalculator):
         breadth_symbols: list[str] | None = None,
         use_fear_greed: bool = False,
         use_coinbase_premium: bool = False,
+        use_recorded: bool = False,
         vol_pct_window: int = 100,
         **_config_only,   # absorb FeatureConfig fields used elsewhere (e.g. premium_exchange,
                           # premium_fetch_tf) so splatting settings.features.model_dump() never
                           # crashes the engine when a config-only field is added.
     ) -> None:
         self.use_coinbase_premium = use_coinbase_premium
+        self.use_recorded = use_recorded
+        self._external_obs: dict | None = None   # latest live observation (set in live mode)
         self.vol_pct_window = vol_pct_window
         self.atr_period = atr_period
         self.vwap_window = vwap_window
@@ -389,6 +392,24 @@ class MicrostructureFeatureEngine(FeatureCalculator):
                 feats["fng_level"] = zero
                 feats["fng_change"] = zero
 
+        # --- Recorded live microstructure (order book / taker flow / spread) from the recorder.
+        # Training/backtest: values are merged onto the frame (obs_* columns). Live: the engine
+        # sets the latest observation via set_external() (the same value fills the last row,
+        # which is the one inference uses). Absent -> 0 (e.g. pre-recording history).
+        if self.use_recorded:
+            ext = self._external_obs or {}
+            for src, name, scale in (
+                ("obs_imbalance", "rec_ob_imb", 1.0), ("obs_imb5", "rec_ob_imb5", 1.0),
+                ("obs_micro", "rec_microprice", 1.0), ("obs_depthimb", "rec_depth_imb", 1.0),
+                ("obs_taker", "rec_taker", 1.0), ("obs_spread", "rec_spread", 1.0),
+            ):
+                if src in cols:
+                    feats[name] = ohlcv[src] * scale
+                elif src in ext:
+                    feats[name] = pd.Series(ext[src] * scale, index=ohlcv.index)
+                else:
+                    feats[name] = zero
+
         # --- Cross-venue premium (Coinbase USD vs Binance USDT), merged by sources.
         if self.use_coinbase_premium:
             if "cb_premium" in cols:
@@ -404,7 +425,9 @@ class MicrostructureFeatureEngine(FeatureCalculator):
                      "oi_z", "cross_ret", "cross_corr", "rel_strength",
                      "htf_trend", "htf_ret", "htf_rsi",
                      "breadth_ret", "breadth_pos", "breadth_rel",
-                     "fng_level", "fng_change", "cb_prem", "cb_prem_change"):
+                     "fng_level", "fng_change", "cb_prem", "cb_prem_change",
+                     "rec_ob_imb", "rec_ob_imb5", "rec_microprice", "rec_depth_imb",
+                     "rec_taker", "rec_spread"):
             if _ext in feats:
                 feats[_ext] = feats[_ext].fillna(0.0)
 
@@ -441,6 +464,10 @@ class MicrostructureFeatureEngine(FeatureCalculator):
         self._last_features = row
         return row if not row.isna().any() else None
 
+    def set_external(self, obs: dict | None) -> None:
+        """Set the latest live recorder observation (obs_* dict) used for recorded features."""
+        self._external_obs = obs or None
+
     def reset(self) -> None:
         self._buffer.clear()
         self._last_features = None
@@ -474,4 +501,7 @@ class MicrostructureFeatureEngine(FeatureCalculator):
             names += ["fng_level", "fng_change"]
         if self.use_coinbase_premium:
             names += ["cb_prem", "cb_prem_change"]
+        if self.use_recorded:
+            names += ["rec_ob_imb", "rec_ob_imb5", "rec_microprice", "rec_depth_imb",
+                      "rec_taker", "rec_spread"]
         return names

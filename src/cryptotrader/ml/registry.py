@@ -38,6 +38,41 @@ def meta_path_for(model_path: str | Path) -> Path:
     return p.with_name(p.name + ".meta.json")  # model_BTCUSDT.pkl.meta.json
 
 
+def candidate_path_for(symbol: str, base: Path | str | None = None) -> Path:
+    """A candidate model trained without replacing the active one (test-before-promote)."""
+    return Path(base or MODELS_DIR) / f"candidate_{safe_symbol(symbol)}.pkl"
+
+
+def has_candidate(symbol: str) -> bool:
+    return candidate_path_for(symbol).exists()
+
+
+def promote_candidate(symbol: str) -> bool:
+    """Atomically replace the active model with the candidate (+ its metadata)."""
+    import shutil
+
+    cand = candidate_path_for(symbol)
+    if not cand.exists():
+        return False
+    active = model_path_for(symbol)
+    shutil.move(str(cand), str(active))
+    cm = meta_path_for(cand)
+    if cm.exists():
+        shutil.move(str(cm), str(meta_path_for(active)))
+    logger.info("Promoted candidate model for %s -> active", symbol)
+    return True
+
+
+def discard_candidate(symbol: str) -> bool:
+    cand = candidate_path_for(symbol)
+    removed = False
+    for p in (cand, meta_path_for(cand)):
+        if p.exists():
+            p.unlink()
+            removed = True
+    return removed
+
+
 def validation_path_for(kind: str, symbol: str, base: Path | str | None = None) -> Path:
     """Path for a persisted validation result, e.g. models/walkforward_BTCUSDT.json."""
     return Path(base or MODELS_DIR) / f"{kind}_{safe_symbol(symbol)}.json"

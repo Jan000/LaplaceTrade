@@ -424,6 +424,27 @@ The whole lifecycle is operable from the UI:
 API keys are never shown or written to `config.yaml`; they live in git-ignored
 `config/secrets.yaml` (or `CT_EXCHANGE__API_KEY` / `CT_EXCHANGE__API_SECRET`).
 
+### Training on the recorded live data + candidate models (test before replacing)
+
+The recorder accumulates microstructure signals (order-book imbalance, microprice, depth,
+taker flow, spread) that free history can't provide. To train a model that *uses* them and
+test it **without disturbing the live one**:
+
+1. Run the recorder for a while (autostart / Experiments tab) so there's data on your
+   timeframe. Enable **Feature modules → Recorded live data** (`features.use_recorded`). The
+   recorded values are merged onto each bar leak-free (last observation in the bar); bars
+   before recording began are zero-filled, so judge it on the recorded window.
+2. **Symbols tab → Cand** — trains a **candidate** model (`models/candidate_<SYMBOL>.pkl`)
+   with the current config; the **active model keeps running untouched**.
+3. **WF / HO** — validate the candidate's config out-of-sample (the Walk-fwd / Holdout /
+   Risk columns reflect it). Compare against the active model's previous numbers.
+4. **Promote** (only if better) swaps the candidate in as the active model; **Discard (✕)**
+   throws it away. Restart the engine to load a promoted model. Live inference feeds the
+   latest recorded observation into the model each bar.
+
+`data.retrain_interval_days` automates step 2–3 on a cadence (alerted); you still review and
+**Promote** manually.
+
 > Note: on a pure random walk (synthetic data) no strategy can be profitable — the
 > edge must come from real micro-structure. Training lets the model *find* it; the
 > walk-forward/holdout is what tells you whether it did.

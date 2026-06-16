@@ -73,6 +73,11 @@ def main() -> None:
     data = {s: asyncio.run(fetch(settings, s, days)) for s in need}
     data = {s: d for s, d in data.items() if d is not None and not d.empty}
 
+    if settings.features.use_recorded:
+        from cryptotrader.data.recorded import merge_recorded
+
+        data[primary] = merge_recorded(data[primary], settings.persistence.db_path,
+                                       primary, settings.exchange.timeframe)
     btc = data[primary]
     cutoff = int(len(btc) * args.train_frac)
     cutoff_ts = btc.index[cutoff]

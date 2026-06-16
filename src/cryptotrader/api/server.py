@@ -90,7 +90,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def symbols() -> JSONResponse:
         """Per-symbol model status + realized trade stats + active flag (Symbols table)."""
         from cryptotrader.ml.registry import (
-            list_models, model_path_for, read_meta, read_validation,
+            candidate_path_for, list_models, model_path_for, read_meta, read_validation,
         )
 
         s = app.state.settings
@@ -131,6 +131,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "profit_factor": round(gw / gl, 3) if gl > 0 else (None if gw > 0 else 0.0),
                 "walkforward": read_validation("walkforward", sym),
                 "holdout": read_validation("holdout", sym),
+                "has_candidate": candidate_path_for(sym).exists(),
+                "candidate_trained_at": (read_meta(candidate_path_for(sym)) or {}).get("saved_at"),
             })
         active_set = trade_set or {s.exchange.symbol}
         real_ok = any(r["matches"] for r in out if r["symbol"] in active_set)
@@ -278,6 +280,23 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "matches": bool(matches),
             "real_ok": bool(matches),  # real orders allowed only when a matching model exists
         })
+
+    @app.post("/api/model/promote")
+    async def model_promote(body: dict) -> JSONResponse:
+        """Replace the active model for a symbol with its tested candidate (restart to apply)."""
+        from cryptotrader.ml.registry import promote_candidate
+
+        sym = body.get("symbol") or app.state.settings.exchange.symbol
+        ok = promote_candidate(sym)
+        return JSONResponse({"promoted": ok, "symbol": sym,
+                             "note": "Restart the engine to load the promoted model."})
+
+    @app.post("/api/model/discard")
+    async def model_discard(body: dict) -> JSONResponse:
+        from cryptotrader.ml.registry import discard_candidate
+
+        sym = body.get("symbol") or app.state.settings.exchange.symbol
+        return JSONResponse({"discarded": discard_candidate(sym), "symbol": sym})
 
     @app.post("/api/start")
     async def start(req: StartRequest) -> JSONResponse:

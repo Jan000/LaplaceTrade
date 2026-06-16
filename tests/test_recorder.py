@@ -69,3 +69,40 @@ async def test_recorder_controller_lifecycle(monkeypatch) -> None:
     assert c.is_running and c.status()["symbols"] == ["BTC/USDT", "ETH/USDT"]
     await c.stop()
     assert not c.is_running and c.status()["running"] is False
+
+
+async def test_merge_recorded_is_leak_free(tmp_path) -> None:
+    """Each bar gets the LAST observation within its interval (known at bar close)."""
+    import pandas as pd
+    from datetime import datetime, timedelta, timezone
+
+    from cryptotrader.data.recorded import merge_recorded
+
+    db = tmp_path / "rec.sqlite"
+    base = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    async with TradeStore(db) as st:
+        await st.record_observation(base + timedelta(minutes=10), "BTC/USDT",
+                                    ob_imbalance=0.1, spread_bps=2.0, taker_buy_ratio=0.6)
+        await st.record_observation(base + timedelta(minutes=200), "BTC/USDT",   # later, same 4h bar
+                                    ob_imbalance=0.3, spread_bps=2.5, imbalance_top5=0.25)
+        await st.record_observation(base + timedelta(hours=4, minutes=5), "BTC/USDT",  # next bar
+                                    ob_imbalance=-0.2, microprice_dev_bps=-1.0)
+    idx = pd.date_range(base, periods=3, freq="4h", tz="UTC")
+    ohlcv = pd.DataFrame({c: [1.0, 1.0, 1.0] for c in ("open", "high", "low", "close", "volume")},
+                         index=idx)
+    out = merge_recorded(ohlcv, db, "BTC/USDT", "4h")
+    assert "obs_imbalance" in out.columns
+    assert abs(out["obs_imbalance"].iloc[0] - 0.3) < 1e-9     # last obs in bar 0
+    assert abs(out["obs_imbalance"].iloc[1] - (-0.2)) < 1e-9  # obs in bar 1
+
+
+def test_recorded_features_present_and_external() -> None:
+    from cryptotrader.data.features import MicrostructureFeatureEngine
+    from cryptotrader.data.ingestion import make_synthetic_ohlcv
+
+    fe = MicrostructureFeatureEngine(use_recorded=True)
+    assert "rec_ob_imb" in fe.feature_names and "rec_taker" in fe.feature_names
+    fe.set_external({"obs_imbalance": 0.5, "obs_taker": 0.7})   # live injection
+    feats = fe.transform(make_synthetic_ohlcv(n=200, seed=1))
+    assert abs(feats["rec_ob_imb"].iloc[-1] - 0.5) < 1e-9      # last row = current obs
+    assert abs(feats["rec_taker"].iloc[-1] - 0.7) < 1e-9

@@ -69,6 +69,7 @@ class JobManager:
 
     SCRIPTS = {
         "train": "scripts/train_model.py",
+        "candidate": "scripts/train_model.py",   # train_model.py --candidate (don't touch active)
         "walkforward": "scripts/walkforward.py",
         "holdout": "scripts/holdout.py",
     }
@@ -93,6 +94,8 @@ class JobManager:
             return key, "busy"  # this exact job is already running
         LOG_DIR.mkdir(parents=True, exist_ok=True)
         args = (["--symbol", symbol] if symbol else []) + list(extra_args or [])
+        if kind == "candidate" and "--candidate" not in args:
+            args.append("--candidate")           # write candidate model, leave the active one
         logf = open(self._log_path(kind, symbol), "wb")
         # -u + PYTHONUNBUFFERED so the script's stdout/stderr stream to the log file live
         # (block-buffered stdout otherwise only appears when the process exits — the

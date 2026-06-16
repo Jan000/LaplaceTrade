@@ -179,6 +179,12 @@ def main() -> None:
     logging.getLogger("cryptotrader.data.sources").setLevel(logging.INFO)
     settings = Settings.load()
     ohlcv = asyncio.run(load_ohlcv(settings, args))
+    if settings.features.use_recorded:
+        from cryptotrader.data.recorded import merge_recorded
+
+        ohlcv = merge_recorded(ohlcv, settings.persistence.db_path,
+                               args.symbol or settings.exchange.symbol,
+                               args.timeframe or settings.exchange.timeframe)
     extra = asyncio.run(load_extra_symbols(settings, args))
     if settings.data.train_symbols:
         got = {s: len(d) for s, d in extra.items()}
