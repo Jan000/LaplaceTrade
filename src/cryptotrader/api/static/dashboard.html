@@ -702,7 +702,7 @@ async function toggleFeature(fkey,on){
 }
 
 /* ---------- jobs (concurrent training / walk-forward / holdout) ---------- */
-let JOBS=[], JOB_OPEN={}, jobsTimer=null, prevRunning=0, _jobsSig="";
+let JOBS=[], JOB_OPEN={}, jobsTimer=null, prevRunning=0, _jobsSig="", _doneSig="";
 const cssid=k=>k.replace(/[^a-zA-Z0-9]/g,"_");
 const STAGES=["train","walkforward","holdout"];        // a full "train + test" pipeline
 const STAGE_LABEL={train:"training",walkforward:"walk-forward",holdout:"holdout"};
@@ -751,7 +751,11 @@ async function refreshJobs(){
   const running=JOBS.filter(j=>j.running).length;
   const started=advancePipelines();
   renderJobs(); updateSymbolProgress();
-  if(running===0 && prevRunning>0 && !pipelinesActive()){ loadSymbols(); refreshGate(); loadModel(); }
+  // Refresh the Symbols table whenever the set of FINISHED jobs changes — i.e. the moment any
+  // one job completes — not only when every job is idle. Otherwise concurrent jobs / the
+  // multi-stage T+T pipeline only update the table once everything stops running.
+  const doneSig=JOBS.filter(j=>!j.running).map(j=>`${j.key}:${j.status}`).sort().join("|");
+  if(doneSig!==_doneSig){ _doneSig=doneSig; loadSymbols(); refreshGate(); loadModel(); }
   prevRunning=running;
   // Poll only while something is actually running (or a pipeline is mid-flight). A finished
   // job's open log is static, so we STOP hammering /api/job/log once everything is done.
@@ -1156,7 +1160,8 @@ $("ops-logs").onclick=loadOps;
 $("ops-retrain").onclick=async()=>{
   if(!confirm("Train + walk-forward the traded symbols now? Watch progress in Symbols/Jobs.")) return;
   const r=await fetch("/api/scheduler/retrain",{method:"POST"}); const d=await r.json();
-  alert("Started: "+((d.started||[]).join(", ")||"nothing")); loadOps(); };
+  alert("Started: "+((d.started||[]).join(", ")||"nothing"));
+  loadOps(); refreshJobs(); };   // begin polling so Symbols/Jobs update as the runs finish
 $("ops-testalert").onclick=async()=>{
   const r=await fetch("/api/notify/test",{method:"POST"}); const d=await r.json();
   alert(d.sent ? "Test alert sent to your configured channel(s)."
