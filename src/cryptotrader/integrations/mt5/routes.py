@@ -21,10 +21,13 @@ def _auth(settings, request: Request) -> None:
     if not settings.mt5.enabled:
         raise HTTPException(status_code=404, detail="MT5 bridge disabled")
     token = settings.mt5.api_token
-    if token:
-        got = request.headers.get("x-api-token", "")
-        if not hmac.compare_digest(got, token):
-            raise HTTPException(status_code=401, detail="invalid MT5 token")
+    # The /api/mt5 prefix is exempt from the dashboard Basic-auth, so a missing token would
+    # leave this order-driving endpoint open to the internet. Refuse rather than run open.
+    if not token:
+        raise HTTPException(status_code=503, detail="MT5 bridge enabled but mt5.api_token is unset")
+    got = request.headers.get("x-api-token", "")
+    if not hmac.compare_digest(got, token):
+        raise HTTPException(status_code=401, detail="invalid MT5 token")
 
 
 def register_mt5_routes(app, get_settings) -> None:

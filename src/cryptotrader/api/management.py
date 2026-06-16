@@ -52,6 +52,9 @@ def _redact(cfg: dict) -> dict:
     db = cfg.get("dashboard")
     if isinstance(db, dict) and db.get("auth_password"):
         db["auth_password"] = None           # never echo the dashboard password
+    mt5 = cfg.get("mt5")
+    if isinstance(mt5, dict) and mt5.get("api_token"):
+        mt5["api_token"] = None              # never echo the MT5 bridge token
     return cfg
 
 

@@ -143,7 +143,7 @@ def _load_predictor(settings: Settings, model_symbol: str):
 
     Returns ``(predictor_or_None, info)``. ``predictor`` is None when a matching model
     is required but missing — the caller then returns a no-trade decision."""
-    from cryptotrader.ml.registry import read_meta, resolve_model
+    from cryptotrader.ml.registry import resolve_model
 
     path, meta = resolve_model(settings)
     tf = settings.exchange.timeframe
