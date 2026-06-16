@@ -18,6 +18,20 @@ def test_pool_for_never_leaves_a_symbol_unaugmented() -> None:
     assert DataConfig(train_symbols=[]).pool_for("ETH/USDT") == []
 
 
+def test_str_list_fields_tolerate_null_entries() -> None:
+    """A malformed config.yaml (e.g. train_symbols: [null] from the old dashboard bug) must
+    not crash Settings load — None/blank entries are dropped, the rest coerced to str."""
+    from cryptotrader.config import FeatureConfig, MLConfig, Settings
+
+    d = DataConfig(train_symbols=[None], trade_symbols=["BTC/USDT", None, "", "  ETH/USDT  "])
+    assert d.train_symbols == []
+    assert d.trade_symbols == ["BTC/USDT", "ETH/USDT"]
+    assert MLConfig(drop_features=[None, "ret_1", ""]).drop_features == ["ret_1"]
+    assert FeatureConfig(breadth_symbols=[None]).breadth_symbols == []
+    # The exact shape that used to 500 the /api/config endpoint now loads cleanly.
+    assert Settings(data={"train_symbols": [None]}).data.train_symbols == []
+
+
 def test_resolved_n_jobs_bounds_threads() -> None:
     import os
 

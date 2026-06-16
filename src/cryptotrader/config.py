@@ -15,12 +15,26 @@ from pathlib import Path
 from typing import Any
 
 import yaml
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from pydantic_settings import (
     BaseSettings,
     SettingsConfigDict,
     YamlConfigSettingsSource,
 )
+
+
+def _clean_str_list(v):
+    """Coerce a config value to a clean list[str]: drop None/blank entries, stringify.
+
+    Guards against a malformed config.yaml (e.g. ``train_symbols: [null]`` written by an
+    earlier dashboard bug) crashing the whole Settings load — and thus the config API."""
+    if v is None:
+        return []
+    if isinstance(v, str):
+        v = [v]
+    if isinstance(v, (list, tuple)):
+        return [str(x).strip() for x in v if x is not None and str(x).strip() != ""]
+    return v
 
 # Set by Settings.load() so the YAML source is only active for an explicit
 # load() (keeps a bare Settings() on pure defaults+env, which the tests rely on).
@@ -68,6 +82,9 @@ class DataConfig(BaseModel):
     # Scheduled auto-retrain: re-train + walk-forward the traded symbols every N days so the
     # deployed model stays fresh on a rolling window (0 = off). Restart the engine to apply.
     retrain_interval_days: float = 0.0
+
+    _clean_symbols = field_validator("train_symbols", "trade_symbols", mode="before")(
+        _clean_str_list)
 
     def pool_for(self, primary: str) -> list[str]:
         """Training-pool symbols for ``primary`` (``train_symbols`` minus itself).
@@ -121,6 +138,7 @@ class FeatureConfig(BaseModel):
     breadth_symbols: list[str] = Field(
         default_factory=lambda: ["ETH/USDT", "SOL/USDT", "BNB/USDT", "XRP/USDT"]
     )
+    _clean_breadth = field_validator("breadth_symbols", mode="before")(_clean_str_list)
     # Crypto Fear & Greed index (alternative.me, free daily sentiment) — orthogonal to price TA.
     use_fear_greed: bool = False
     # Cross-venue premium: price on a USD exchange (Coinbase) vs the USDT exchange (Binance) —
@@ -159,6 +177,7 @@ class MLConfig(BaseModel):
     random_state: int = 42                  # fix for reproducible runs
     use_meta_labeling: bool = False         # add a secondary "should I act?" model
     drop_features: list[str] = Field(default_factory=list)  # feature names to exclude (anti-overfit pruning)
+    _clean_drop = field_validator("drop_features", mode="before")(_clean_str_list)
     ensemble_size: int = 1                  # >1 averages N seed-varied models (variance reduction)
     bagging_freq: int = 0                   # LightGBM bagging frequency; >0 makes `subsample` actually bag
     # Probability calibration: temperature-scale the ensemble's class probabilities, fit on a
