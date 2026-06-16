@@ -5,6 +5,8 @@ __pycache__/
 .env
 .cache/
 data/*.sqlite
+data/*.sqlite-*
+data/mt5/
 *.txt.gz
 .pytest_cache/
 pytest-cache-files-*/

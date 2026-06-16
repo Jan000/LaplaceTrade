@@ -228,6 +228,15 @@ health check):
 On a real-money start the engine sizes from the **actual exchange balance** (not the
 configured number) and warns about any pre-existing open orders.
 
+### Trading on MetaTrader 5 (forex / CFDs / crypto-CFDs)
+
+A MQL5 Expert Advisor can drive an MT5 broker from the same dashboard: it streams the
+broker's bars to `/api/mt5/decide`, the server runs the identical feature/model/strategy/risk
+pipeline, and the EA places the order with native SL/TP. The brain stays on Linux/Coolify —
+no Windows-only Python package needed. Set `mt5.enabled` + a token + a `symbol_map`, install
+`src/cryptotrader/integrations/mt5/expert/CryptoTraderBridge.mq5`, and whitelist the URL in
+the terminal. Full guide: **[docs/mt5.md](docs/mt5.md)**.
+
 ### Production-readiness — what's done vs. still hardening
 
 **In place:** per-symbol guardrail (no trading a coin with another's model) · native

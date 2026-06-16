@@ -309,6 +309,31 @@ class DashboardConfig(BaseModel):
     auth_password: str | None = None
 
 
+class MT5Config(BaseModel):
+    """MetaTrader 5 bridge: a MQL5 Expert Advisor calls /api/mt5/* over HTTP.
+
+    The EA pushes its broker bars/position and asks this service for a trading
+    decision; the EA then places the broker order itself. This keeps the whole ML
+    brain on Linux/Coolify (no Windows-only MetaTrader5 Python package needed).
+
+    Auth is a shared token (``api_token``) the EA sends as the ``X-API-Token`` header;
+    put it in the git-ignored config/secrets.yaml, not config.yaml. ``symbol_map`` maps
+    each MT5 broker symbol to the internal model symbol, e.g. {"BTCUSD": "BTC/USDT"} —
+    explicit mapping is required for anything the crypto heuristic can't infer (forex,
+    indices, commodities). ``require_model`` refuses to trade a symbol that has no
+    matching trained model (never falls back to the momentum baseline for real orders).
+    """
+
+    enabled: bool = False
+    api_token: str | None = None                  # shared secret for /api/mt5/* (secrets.yaml)
+    symbol_map: dict[str, str] = Field(default_factory=dict)   # MT5 symbol -> internal symbol
+    default_timeframe: str | None = None          # fallback if the EA omits one (else exchange.timeframe)
+    require_model: bool = True                     # don't trade symbols without a matching model
+    capture_bars: bool = True                     # persist bars the EA sends (offline training set)
+    capture_max_rows: int = 200_000               # cap per symbol/timeframe parquet
+    poll_seconds: float = 60.0                     # advisory cadence reported to the EA
+
+
 class PersistenceConfig(BaseModel):
     db_path: Path = Path("data/cryptotrader.sqlite")
 
@@ -335,6 +360,7 @@ class Settings(BaseSettings):
     persistence: PersistenceConfig = Field(default_factory=PersistenceConfig)
     notify: NotificationConfig = Field(default_factory=NotificationConfig)
     dashboard: DashboardConfig = Field(default_factory=DashboardConfig)
+    mt5: MT5Config = Field(default_factory=MT5Config)
 
     # Source priority (first = highest): init kwargs > environment > YAML > defaults.
     # This is what makes CT_* env vars actually override config.yaml.

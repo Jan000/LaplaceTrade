@@ -61,10 +61,24 @@ def build_feature_engine(settings: Settings) -> MicrostructureFeatureEngine:
 
 
 async def load_ohlcv(settings: Settings, args: argparse.Namespace) -> pd.DataFrame:
-    """Return the OHLCV frame to train on (real exchange data or synthetic)."""
+    """Return the OHLCV frame to train on (real exchange data, captured MT5, or synthetic)."""
     if args.synthetic:
         logger.info("Using synthetic OHLCV (%d bars)", args.bars)
         return make_synthetic_ohlcv(n=args.bars, seed=args.seed)
+
+    if args.mt5:
+        from cryptotrader.integrations.mt5.store import capture_path, load_ohlcv as load_mt5
+
+        symbol = args.symbol or settings.exchange.symbol
+        df = load_mt5(settings, symbol, settings.exchange.timeframe)
+        if df.empty:
+            raise SystemExit(
+                f"No captured MT5 data for {symbol} {settings.exchange.timeframe} at "
+                f"{capture_path(settings, symbol, settings.exchange.timeframe)}.\n"
+                "Run the CryptoTraderBridge EA first so the dashboard records bars."
+            )
+        logger.info("Loaded %d captured MT5 candles for %s", len(df), symbol)
+        return df
 
     exchange_id = args.exchange or settings.exchange.id
     symbol = args.symbol or settings.exchange.symbol
@@ -166,6 +180,8 @@ def main() -> None:
         "--timeframe", type=str, default=None,
         help="override config timeframe (e.g. 5m, 15m) — larger = lower cost drag",
     )
+    parser.add_argument("--mt5", action="store_true",
+                        help="train on bars captured from the MT5 bridge (data/mt5/<SYMBOL>_<tf>.parquet)")
     parser.add_argument("--synthetic", action="store_true", help="offline synthetic data")
     parser.add_argument("--bars", type=int, default=20000, help="bars when --synthetic")
     parser.add_argument("--seed", type=int, default=7)
@@ -224,7 +240,7 @@ def main() -> None:
 
     train_frames = [train_ohlcv]
     primary = args.symbol or settings.exchange.symbol
-    if not args.synthetic and settings.data.pool_for(primary):
+    if not args.synthetic and not args.mt5 and settings.data.pool_for(primary):
         cutoff_ts = ohlcv.index[split] if split < len(ohlcv) else ohlcv.index[-1]
         extra = asyncio.run(load_extra_symbols(settings, args))
         for df in extra.values():

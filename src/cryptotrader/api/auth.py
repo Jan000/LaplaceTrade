@@ -18,10 +18,13 @@ _EXEMPT = {"/api/health"}
 
 
 class BasicAuthMiddleware:
-    def __init__(self, app, get_auth, exempt: set[str] | None = None) -> None:
+    def __init__(self, app, get_auth, exempt: set[str] | None = None,
+                 exempt_prefixes: tuple[str, ...] | set[str] | None = None) -> None:
         self.app = app
         self._get_auth = get_auth                 # () -> (user, password|None)
         self._exempt = exempt or _EXEMPT
+        # Path prefixes that carry their own auth (e.g. the token-protected MT5 bridge).
+        self._exempt_prefixes = tuple(exempt_prefixes or ())
 
     def _authorized(self, headers: list[tuple[bytes, bytes]], user: str, password: str) -> bool:
         raw = dict(headers).get(b"authorization")
@@ -43,7 +46,8 @@ class BasicAuthMiddleware:
         user, password = self._get_auth()
         if not password:                          # auth disabled -> pass through
             return await self.app(scope, receive, send)
-        if scope.get("path") in self._exempt:
+        path = scope.get("path") or ""
+        if path in self._exempt or path.startswith(self._exempt_prefixes):
             return await self.app(scope, receive, send)
         if self._authorized(scope.get("headers") or [], user, password):
             return await self.app(scope, receive, send)

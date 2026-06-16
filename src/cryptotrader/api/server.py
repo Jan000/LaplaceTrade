@@ -42,6 +42,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.recorder = recorder
     register_management_routes(app, controller)  # /api/config + /api/train
 
+    from cryptotrader.integrations.mt5.routes import register_mt5_routes
+
+    register_mt5_routes(app, lambda: app.state.settings)  # /api/mt5/* (token-auth)
+
     from cryptotrader.api.scheduler import Scheduler
 
     scheduler = Scheduler(settings, app.state.jobs, controller)
@@ -55,6 +59,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         BasicAuthMiddleware,
         get_auth=lambda: (app.state.settings.dashboard.auth_user,
                           app.state.settings.dashboard.auth_password),
+        # /api/mt5/* carries its own token auth (the MT5 EA can't do a Basic-auth prompt).
+        exempt={"/api/health"}, exempt_prefixes={"/api/mt5/"},
     )
 
     _COMMON_SYMBOLS_AUTOSTART = ["BTC/USDT", "ETH/USDT", "SOL/USDT", "BNB/USDT",
