@@ -26,6 +26,7 @@ services:
       - ct_data:/app/data                # SQLite DB (trades, equity, observations)
       - ct_models:/app/models            # trained models + experiments.jsonl + scheduler state
       - ct_cache:/app/.cache             # OHLCV cache
+      - ct_config:/app/config            # editable config.yaml (dashboard edits persist here)
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8000/api/health"]
       interval: 60s
@@ -38,3 +39,4 @@ volumes:
   ct_data:
   ct_models:
   ct_cache:
+  ct_config:

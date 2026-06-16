@@ -150,7 +150,10 @@
     </div>
     <div class="sym" style="margin-top:8px;font-size:11.5px">
       <b>Trade</b> = include in concurrent live/sim trading (equity is split across ticked symbols).
-      <b>Train / WF / HO</b> start a job for that symbol (several can run at once); watch them below.
+      Per-row buttons (right edge of each row — scroll the table sideways if cut off):
+      <b>T+T</b> = train + walk-forward + holdout in sequence; <b>Train / WF / HO</b> = run one job;
+      <b>Cand</b> = train a <b>candidate</b> model with the current config (e.g. recorded data) <i>without</i>
+      touching the live one; once tested, <b>Promote</b> replaces the active model (or <b>✕</b> discards it).
       <b>Walk-fwd / Holdout</b> are the out-of-sample edge estimates — sort by them to choose what to trade.
       <b>Trades / Win% / PF / Eff / Net PnL</b> are realized results from <b>paper &amp; real</b> runs only
       (simulation replays excluded). Click a column header to sort.</div>

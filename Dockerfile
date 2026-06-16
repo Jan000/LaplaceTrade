@@ -12,17 +12,24 @@ COPY pyproject.toml README.md ./
 COPY src ./src
 RUN pip install -e .          # fastapi/uvicorn are core deps; the legacy streamlit extra is not needed
 
-COPY config ./config
+# Baked config is only a *seed*. At runtime the entrypoint copies it into the /app/config
+# volume on first boot, so dashboard config edits (autostart, trade symbols, feature
+# toggles, …) survive redeploys instead of resetting to the image defaults.
+COPY config ./config_default
 COPY scripts ./scripts
 
-# Persisted data (DB, models, cache) live on a mounted volume.
-VOLUME ["/app/data", "/app/models", "/app/.cache"]
+# Persisted state lives on mounted volumes (DB, models, cache, and the editable config).
+VOLUME ["/app/data", "/app/models", "/app/.cache", "/app/config"]
 EXPOSE 8000
 
 HEALTHCHECK --interval=60s --timeout=10s --retries=3 \
     CMD curl -fsS http://127.0.0.1:8000/api/health || exit 1
 
-# Bind to all interfaces inside the container (a reverse proxy / Coolify terminates TLS in
-# front). --proxy-headers so X-Forwarded-* from the proxy are trusted.
+# Seed /app/config from the baked defaults on first boot (only when the volume is empty),
+# then exec the CMD. Bind to all interfaces inside the container (a reverse proxy / Coolify
+# terminates TLS in front). --proxy-headers so X-Forwarded-* from the proxy are trusted.
+ENTRYPOINT ["/bin/sh", "-c", \
+  "if [ ! -f /app/config/config.yaml ] && [ -d /app/config_default ]; then mkdir -p /app/config && cp -a /app/config_default/. /app/config/ 2>/dev/null || true; fi; exec \"$@\"", \
+  "--"]
 CMD ["uvicorn", "cryptotrader.api.server:app", "--host", "0.0.0.0", "--port", "8000", \
      "--proxy-headers", "--forwarded-allow-ips", "*"]
