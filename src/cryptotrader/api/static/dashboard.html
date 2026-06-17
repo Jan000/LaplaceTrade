@@ -1249,13 +1249,20 @@ $("ops-autolog").onchange=()=>{ clearInterval(opsTimer);
 let recTimer=null;
 async function refreshRecorder(){
   try{const s=await fetch("/api/recorder/status").then(r=>r.json());
-    $("rec-dot").className="dot "+(s.running?"running":"idle");
     $("rec-start").disabled=s.running; $("rec-stop").disabled=!s.running;
     if(document.activeElement!==$("rec-autostart")) $("rec-autostart").checked=!!s.autostart;
     const per=Object.entries(s.counts||{}).sort((a,b)=>b[1]-a[1]).map(([k,v])=>`${k}:${v}`).join(" · ");
+    // Freshness: how long since the last successful write. Running but stale (no write for
+    // >3× the interval) is flagged amber/red so a silently-failing recorder is visible.
+    const lw=s.last_write?new Date(s.last_write):null;
+    const ageMin=lw?Math.max(0,Math.round((Date.now()-lw.getTime())/60000)):null;
+    const stale=s.running && (lw==null || ageMin > Math.max(5,(s.interval||120)/60*3));
+    $("rec-dot").className="dot "+(!s.running?"idle":(stale?"error":"running"));
     $("rec-status").textContent =
       (s.running?`recording ${s.symbols.length} symbols every ${s.interval|0}s`:"stopped")
-      + (s.total?` — ${s.total} observations (${per})`:" — no data yet");
+      + (s.total?` — ${s.total} obs (${per})`:" — no data yet")
+      + (lw?` · last write ${ageMin}m ago`:(s.running?" · ⏳ no write yet":""))
+      + (stale&&s.last_error?` · ⚠ ${s.last_error}`:"");
     clearInterval(recTimer); recTimer = s.running ? setInterval(refreshRecorder,10000) : null;
     // live market-analysis: refresh the chart/stats while recording
     if(s.running && $("an-live").checked && !$("view-experiments").classList.contains("hidden")
@@ -1333,10 +1340,29 @@ function anStatsOf(ser,fields){
   }
   return out;
 }
+/* Insert a break (null point) wherever the time between consecutive observations exceeds
+   ~2.5× the typical sampling cadence, so recorder downtime shows as a GAP instead of a
+   straight line bridging across missing data. Returns {labels, data, gaps}. */
+function anWithGaps(ser, f){
+  const lbl=o=>(o.timestamp||"").replace("T"," ").slice(5,16);
+  if(ser.length<2) return {labels:ser.map(lbl), data:ser.map(o=>o[f]!=null?o[f]:null), gaps:0};
+  const ts=ser.map(o=>Date.parse(o.timestamp));
+  const dt=[]; for(let i=1;i<ts.length;i++) dt.push(ts[i]-ts[i-1]);
+  const med=[...dt].sort((a,b)=>a-b)[Math.floor(dt.length/2)]||0;
+  const thresh=med>0?med*2.5:Infinity;
+  const labels=[], data=[]; let gaps=0;
+  for(let i=0;i<ser.length;i++){
+    if(i>0 && (ts[i]-ts[i-1])>thresh){ labels.push("⋯"); data.push(null); gaps++; }  // visible break
+    labels.push(lbl(ser[i])); data.push(ser[i][f]!=null?ser[i][f]:null);
+  }
+  return {labels, data, gaps};
+}
 function applyAnalysisView(){
   const ser=anWindowed(), f=$("an-metric").value, c=ensureAnChart();
-  c.data.labels=ser.map(o=>(o.timestamp||"").replace("T"," ").slice(5,16));
-  c.data.datasets[0].data=ser.map(o=>o[f]!=null?o[f]:null);
+  const g=anWithGaps(ser, f);
+  c.data.labels=g.labels;
+  c.data.datasets[0].data=g.data;
+  c.data.datasets[0].spanGaps=false;          // do NOT bridge nulls -> gaps render as breaks
   c.data.datasets[0].label=mlabel(f); c.update("none");
   const st=anStatsOf(ser, AN.fields||[]);
   // window summary derived from mid price: return % and per-bar realized vol.
@@ -1349,7 +1375,8 @@ function applyAnalysisView(){
     summary=` · return ${ret>=0?'+':''}${fmt(ret,2)}% · vol ${fmt(vol,3)}%/bar`;
   }
   $("an-meta").textContent=`${ser.length}/${AN.n||0} obs`+
-    (ser.length?` · ${ser[0].timestamp.replace("T"," ").slice(0,16)} → ${ser[ser.length-1].timestamp.replace("T"," ").slice(0,16)}`:"")+summary;
+    (ser.length?` · ${ser[0].timestamp.replace("T"," ").slice(0,16)} → ${ser[ser.length-1].timestamp.replace("T"," ").slice(0,16)}`:"")+summary+
+    (g.gaps?` · ⚠ ${g.gaps} gap${g.gaps>1?"s":""} (recorder downtime)`:"");
   $("an-stats").innerHTML = ((AN.fields||[]).length && ser.length) ? (AN.fields).map(f=>{
     const s=st[f]||{}, d=(f.includes("price")||f.includes("vol")||f==="open_interest")?2:5;
     return `<tr><td>${mlabel(f)}</td><td>${fmt(s.last,d)}</td><td>${fmt(s.mean,d)}</td>

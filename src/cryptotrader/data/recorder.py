@@ -86,9 +86,22 @@ class MarketRecorder:
         self._fut = MarketDataFeed(exchange_id=settings.exchange.id, timeframe="1m",
                                    cache_dir=None, default_type="future")._make_client(pro=False)
         self._stop = False
+        # Health/observability (surfaced in the recorder status + logs).
+        self.writes = 0
+        self.cycles = 0
+        self.last_write: datetime | None = None
+        self.last_error: str | None = None
 
     def stop(self) -> None:
         self._stop = True
+
+    def stats(self) -> dict:
+        return {
+            "writes": self.writes,
+            "cycles": self.cycles,
+            "last_write": self.last_write.isoformat() if self.last_write else None,
+            "last_error": self.last_error,
+        }
 
     async def _call(self, coro):
         """Await a network coroutine with a hard timeout so a hung venue can't stall the
@@ -136,20 +149,44 @@ class MarketRecorder:
             logger.debug("open interest unavailable for %s", symbol, exc_info=True)
         return m
 
-    async def _sample(self, store: TradeStore, symbol: str) -> None:
+    async def _sample(self, store: TradeStore, symbol: str) -> bool:
         m = await self.sample_symbol(symbol)
         if m:
             await store.record_observation(datetime.now(tz=timezone.utc), symbol, **m)
+            return True
+        return False
 
     async def run(self) -> None:
         store = await TradeStore(self.settings.persistence.db_path).connect()
         logger.info("MarketRecorder started: %d symbols every %.0fs", len(self.symbols), self.interval)
         try:
             while not self._stop:
+                wrote = 0
+                errored = False
                 for sym in self.symbols:
                     if self._stop:
                         break
-                    await self._sample(store, sym)
+                    # One bad symbol / DB hiccup must NEVER kill the recorder — isolate it,
+                    # record the error and carry on (the task used to die here, going silent).
+                    try:
+                        if await self._sample(store, sym):
+                            wrote += 1
+                            self.writes += 1
+                            self.last_write = datetime.now(tz=timezone.utc)
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception as exc:
+                        errored = True
+                        self.last_error = f"{type(exc).__name__}: {exc}"[:200]
+                        logger.warning("recorder: sample/store failed for %s", sym, exc_info=True)
+                self.cycles += 1
+                # All samples came back empty (no exception) — almost always a geo-block /
+                # network / wrong-symbol issue. Surface it; keep any specific error otherwise.
+                if wrote == 0 and not errored and not self._stop:
+                    self.last_error = f"0 observations written (all sources empty on {self.settings.exchange.id})"
+                    logger.warning("recorder: cycle wrote 0 observations for %d symbol(s) — "
+                                   "all sources empty (geo-block / network / bad symbol on %s?)",
+                                   len(self.symbols), self.settings.exchange.id)
                 # responsive stop: sleep in short slices
                 slept = 0.0
                 while slept < self.interval and not self._stop:

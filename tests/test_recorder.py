@@ -71,6 +71,88 @@ async def test_recorder_controller_lifecycle(monkeypatch) -> None:
     assert not c.is_running and c.status()["running"] is False
 
 
+def test_recorder_loop_survives_write_errors(monkeypatch) -> None:
+    """A failing record_observation (e.g. DB locked) must NOT propagate out of the run loop —
+    the recorder records the error and keeps cycling instead of dying silently."""
+    import cryptotrader.data.recorder as drec
+
+    r = drec.MarketRecorder(Settings(), ["BTC/USDT"], interval=0.01)
+
+    async def fake_sample(_sym):
+        return {"mid_price": 100.0}
+
+    class BadStore:
+        async def record_observation(self, *a, **k):
+            raise RuntimeError("database is locked")
+
+        async def close(self):
+            pass
+
+    class FakeTS:
+        def __init__(self, *a, **k):
+            pass
+
+        async def connect(self):
+            return BadStore()
+
+    monkeypatch.setattr(r, "sample_symbol", fake_sample)
+    monkeypatch.setattr(drec, "TradeStore", FakeTS)
+    monkeypatch.setattr(r, "aclose", lambda: asyncio.sleep(0))
+
+    async def main():
+        task = asyncio.create_task(r.run())
+        for _ in range(300):
+            await asyncio.sleep(0)
+            if r.cycles >= 1:
+                break
+        assert r.cycles >= 1                       # kept cycling despite the write error
+        assert r.last_error and "locked" in r.last_error
+        r.stop()
+        await asyncio.wait_for(task, timeout=2)
+
+    asyncio.run(main())
+
+
+def test_supervisor_keeps_recorder_alive_after_crash(monkeypatch) -> None:
+    """If the recorder run() raises, the controller keeps the supervised task alive and
+    restarts it — the old code let one crash kill recording for good (shown 'inactive')."""
+    import cryptotrader.api.recorder_control as rc
+    import cryptotrader.data.recorder as drec
+
+    calls = {"n": 0}
+
+    class FakeRec:
+        def __init__(self, *a, **k):
+            self._stop = False
+
+        def stop(self):
+            self._stop = True
+
+        async def run(self):
+            calls["n"] += 1
+            if calls["n"] < 2:
+                raise RuntimeError("boom")          # first run crashes
+            while not self._stop:                   # then stay alive until stopped
+                await asyncio.sleep(0.001)
+
+    monkeypatch.setattr(drec, "MarketRecorder", FakeRec)
+
+    async def main():
+        real_sleep = asyncio.sleep
+        monkeypatch.setattr(rc.asyncio, "sleep", lambda _d: real_sleep(0))  # instant backoff
+        c = rc.RecorderController(Settings())
+        await c.start(["BTC/USDT"], 1)
+        for _ in range(500):
+            await real_sleep(0)
+            if calls["n"] >= 2:
+                break
+        assert c.is_running and calls["n"] >= 2     # survived the crash and restarted
+        await c.stop()
+        assert not c.is_running
+
+    asyncio.run(main())
+
+
 async def test_merge_recorded_is_leak_free(tmp_path) -> None:
     """Each bar gets the LAST observation within its interval (known at bar close)."""
     import pandas as pd
